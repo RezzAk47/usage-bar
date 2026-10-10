@@ -286,7 +286,8 @@ impl Lock {
         lock_path.push(".lock");
         let Ok(f) = fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .read(true)
+            .write(true)
             .open(PathBuf::from(lock_path))
         else {
             return Ok(Lock(None));
@@ -872,7 +873,8 @@ mod tests {
         let holder = loop {
             match fs::OpenOptions::new()
                 .create(true)
-                .append(true)
+                .read(true)
+                .write(true)
                 .open(&lock_path)
             {
                 Ok(f) => break f,
