@@ -132,20 +132,33 @@ pub fn find_codex_with(
     find_codex_inner(os, env, user_path, extra(all_system_dirs))
 }
 
+/// Trims spaces and ONE pair of matching surrounding quotes: Windows Explorer's "Copy as path" gives `"C:\...\codex.exe"`,
+/// and Windows PATH entries may be quoted (`"C:\Program Files\nodejs"`). A quote is never a real part of these paths.
+fn unquote(s: &str) -> &str {
+    let t = s.trim();
+    for q in ['"', '\''] {
+        if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) {
+            return t[1..t.len() - 1].trim();
+        }
+    }
+    t
+}
+
 fn find_codex_inner(
     os: Os,
     env: &dyn Fn(&str) -> Option<String>,
     user_path: Option<&str>,
     extra: Vec<PathBuf>,
 ) -> Option<PathBuf> {
-    if let Some(u) = user_path.filter(|u| !u.trim().is_empty()) {
-        let p = PathBuf::from(u.trim());
+    if let Some(u) = user_path.map(unquote).filter(|u| !u.is_empty()) {
+        let p = PathBuf::from(u);
         return acceptable(&p, os).then_some(p); // a bad choice is not silently replaced by another program
     }
     let sep = if os == Os::Windows { ';' } else { ':' };
     let path_dirs: Vec<PathBuf> = env("PATH")
         .unwrap_or_default()
         .split(sep)
+        .map(unquote)
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
         .filter(|d| d.is_absolute())
@@ -334,6 +347,33 @@ mod tests {
             !acceptable(Path::new("/etc/hosts"), Os::Linux),
             "not executable"
         );
+    }
+
+    /// Windows Explorer's "Copy as path" puts double quotes around the path, and Windows PATH entries may be quoted too
+    /// (`"C:\Program Files\nodejs"`). Both must still find the program.
+    #[test]
+    fn a_quoted_settings_path_or_path_entry_is_unquoted() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home").display().to_string();
+        let mine = d.path().join("my dir/codex");
+        exe(&mine);
+        let env = env_of(vec![("PATH", "/usr/bin".into())]);
+        for quoted in [
+            format!("\"{}\"", mine.display()),
+            format!("  \"{}\" ", mine.display()),
+            format!("'{}'", mine.display()),
+        ] {
+            assert_eq!(
+                find_codex(Os::Linux, &env, &home, Some(&quoted)),
+                Some(mine.clone()),
+                "{quoted}"
+            );
+        }
+        let env = env_of(vec![(
+            "PATH",
+            format!("\"{}\"", d.path().join("my dir").display()),
+        )]);
+        assert_eq!(find_codex(Os::Linux, &env, &home, None), Some(mine));
     }
 
     #[test]
