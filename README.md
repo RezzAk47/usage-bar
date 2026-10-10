@@ -165,7 +165,7 @@ Questions or a security problem: rzk.karimi@gmail.com. Please do not post tokens
 
 Based on [CLI-Usage](https://github.com/nimaansari/CLI-Usage) by Nima Ansari (MIT). Thank you, Nima.
 
-See `THIRD-PARTY-NOTICES.md` for the licences of the components this app uses, and for trademark notes (Claude, Codex, GitHub and Apple names are used only descriptively; no affiliation or endorsement).
+See `THIRD-PARTY-NOTICES.md` for the licences of the components this app uses (the full texts are in `THIRD-PARTY-LICENSES.txt`), and for trademark notes (Claude, Codex, GitHub and Apple names are used only descriptively; no affiliation or endorsement).
 
 
 ## Releasing

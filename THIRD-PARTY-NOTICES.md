@@ -8,8 +8,9 @@ The frontend list was taken from the installed `node_modules` package files (`pa
 was generated on 2026-10-10 from `src-tauri/Cargo.lock` with `cargo tree --locked -e normal,build --target <triple>` (cargo 1.99.0
 run in `src-tauri`) for each target the release workflow (`.github/workflows/release.yml`) builds, joined with the licence
 expression of every crate from `cargo metadata --locked --format-version 1`. It lists the SPDX licence each crate declares. It is
-not legal advice. Full licence texts are in each crate's source on crates.io; to produce a single file with every text, run
-`cargo about` or `cargo license` before a real release (not run here). Regenerate this file whenever `Cargo.lock` changes.
+not legal advice. The full licence texts of the crates and of the frontend packages are in `THIRD-PARTY-LICENSES.txt`, built by
+`python3 scripts/gen-licenses.py` (it reads the licence files shipped in each package; 23 crates ship none, and the file lists them
+by name with the licence they declare). Regenerate both files whenever `Cargo.lock` or the frontend packages change.
 
 ## Frontend (bundled into the app window)
 
