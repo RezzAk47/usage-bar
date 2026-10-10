@@ -1,0 +1,563 @@
+# Release smoke test: builds the REAL release bundles (the same commands as release.yml) and runs the INSTALLED app on real
+# Linux (x86_64, .deb and .AppImage), Windows (NSIS installer) and macOS (.dmg) with synthetic data only.
+# Run by hand: gh workflow run release-smoke.yml --ref <branch>. Nothing is published; the screenshots and logs are artifacts.
+# NOT YET EXECUTED: GitHub Actions has never run this file. Expect small fixes on the first real run.
+# Pins: the same full commit SHAs as release.yml; no other third-party actions; everything else is plain shell / PowerShell.
+name: release-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x86_64 (.deb and .AppImage)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PRODUCT: 'Usage Bar'
+      SLUG: 'usage-bar-cross'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system packages (WebKitGTK, tray, build tools) and the virtual desktop
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y xvfb xdotool imagemagick dbus-x11 openbox x11-utils python3
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Build the release bundles (same as release.yml)
+        run: npm run tauri build -- --bundles deb,appimage
+
+      - name: Write the smoke scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke" "$RUNNER_TEMP/smoke-out"
+          cat > "$RUNNER_TEMP/smoke/helper.py" <<'HELPER_EOF'
+          import http.server, json, os, sys, time, datetime
+          mode, arg = sys.argv[1], sys.argv[2]
+          if mode == "usage-creds":
+              root = arg
+              for d, name, body in (
+                  ("claude", ".credentials.json", {"claudeAiOauth": {"accessToken": "FAKE-CLAUDE-TOKEN-" + "a1" * 14, "expiresAt": int(time.time() * 1000) + 3600000, "subscriptionType": "max"}}),
+                  ("codex", "auth.json", {"tokens": {"access_token": "FAKE-CODEX-TOKEN-" + "x9" * 14, "account_id": "acct-fake-1"}}),
+              ):
+                  p = os.path.join(root, "creds", d); os.makedirs(p, exist_ok=True)
+                  f = os.path.join(p, name)
+                  with open(f, "w") as h: json.dump(body, h)
+                  try: os.chmod(f, 0o600)
+                  except OSError: pass
+          elif mode == "fake-provider":
+              class H(http.server.BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      now = int(time.time())
+                      iso = lambda s: datetime.datetime.fromtimestamp(s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                      if self.path.startswith("/api/oauth/usage"):
+                          body = {"five_hour": {"utilization": 85.0, "resets_at": iso(now + 8000)}, "seven_day": {"utilization": 40, "resets_at": iso(now + 300000)}}
+                      elif self.path.startswith("/backend-api/wham/usage"):
+                          body = {"plan_type": "plus", "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000, "reset_at": now + 3600}, "secondary_window": {"used_percent": 20, "limit_window_seconds": 604800, "reset_at": now + 90000}}}
+                      else:
+                          self.send_response(404); self.end_headers(); return
+                      data = json.dumps(body).encode()
+                      self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
+                      sys.stderr.write("GET %s auth=%s\n" % (self.path, "present" if self.headers.get("authorization") else "missing")); sys.stderr.flush()
+                  def log_message(self, *a): pass
+              http.server.HTTPServer(("127.0.0.1", int(arg)), H).serve_forever()
+          HELPER_EOF
+          cat > "$RUNNER_TEMP/smoke/prep.sh" <<'PREP_EOF'
+          prep_env() {
+            export USAGEBAR_TEST=1 USAGEBAR_DATA_DIR="$1/data" USAGEBAR_CLAUDE_DIR="$1/creds/claude" USAGEBAR_CODEX_DIR="$1/creds/codex"
+            export USAGEBAR_API_BASE_CLAUDE=http://127.0.0.1:18765 USAGEBAR_API_BASE_CODEX=http://127.0.0.1:18765 HTTPS_PROXY= HTTP_PROXY=
+            mkdir -p "$USAGEBAR_DATA_DIR"
+            python3 "$RUNNER_TEMP/smoke/helper.py" usage-creds "$1"
+            python3 "$RUNNER_TEMP/smoke/helper.py" fake-provider 18765 >"$1/provider.log" 2>&1 &
+            FAKE_PID=$!
+            sleep 1
+          }
+          PREP_EOF
+          cat > "$RUNNER_TEMP/smoke/smoke.sh" <<'SMOKE_EOF'
+          # usage: smoke.sh <label> <command...>   (run inside xvfb-run + dbus-launch; BINNAME, PRODUCT, RUNNER_TEMP are set)
+          label=$1; shift
+          out="$RUNNER_TEMP/smoke-out"; mkdir -p "$out"
+          fails=0
+          pass() { echo "PASS: $*"; }
+          fail() { echo "FAIL: $*"; fails=$((fails+1)); }
+          warn() { echo "WARN: $*"; }
+          root=$(mktemp -d)
+          export HOME="$root/home"; mkdir -p "$HOME"
+          export XDG_RUNTIME_DIR="$root/run"; mkdir -m 700 -p "$XDG_RUNTIME_DIR"
+          . "$RUNNER_TEMP/smoke/prep.sh"; prep_env "$root"
+          echo "[$label] throwaway HOME=$HOME, display=$DISPLAY, binary name=$BINNAME"
+          PAT="^[^ ]*[/]${BINNAME}( |\$)"   # anchored at the start of the command line, so this script and xvfb-run never match
+          alive() { kill -0 "$PID" 2>/dev/null || pgrep -f "$PAT" >/dev/null; }
+
+          openbox >"$out/$label-openbox.log" 2>&1 &
+          OB=$!
+          sleep 2
+
+          "$@" >"$out/$label-app.out.log" 2>"$out/$label-app.err.log" &
+          PID=$!
+          sleep 10
+          if alive; then pass "[$label] the app is alive after 10 s"; else fail "[$label] the app is not running after 10 s"; fi
+          if grep -q 'tray icon created' "$out/$label-app.err.log"; then pass "[$label] stderr says the tray icon was created"; else fail "[$label] no 'tray icon created' line in stderr"; fi
+
+          xwininfo -root -tree > "$out/$label-xwininfo-before.txt" 2>&1
+          echo "--- X windows before the second launch:"; sed 's/^/  /' "$out/$label-xwininfo-before.txt" | head -40
+          # Tray icon: an AppIndicator has no X window of its own without a StatusNotifier host, so this is a soft check.
+          if xdotool search --onlyvisible --classname "$BINNAME" >/dev/null 2>&1 || grep -qiE 'tray|indicator|statusnotifier' "$out/$label-xwininfo-before.txt"; then
+            pass "[$label] an X window that looks like a tray icon exists"
+          else
+            warn "[$label] no tray-icon X window (expected: no StatusNotifier host runs in this virtual desktop; the log line above is the tray evidence)"
+          fi
+
+          # second launch = single-instance toggle: the popup should appear
+          "$@" >"$out/$label-app2.out.log" 2>&1 &
+          WID=""
+          for i in $(seq 1 40); do
+            WID=$(xdotool search --onlyvisible --name "^${PRODUCT}\$" 2>/dev/null | head -n 1)
+            [ -n "$WID" ] && break
+            sleep 0.5
+          done
+          sleep 1
+          if [ -n "$WID" ]; then
+            eval "$(xdotool getwindowgeometry --shell "$WID")"
+            pass "[$label] window '$PRODUCT' appeared (id $WID), size ${WIDTH}x${HEIGHT}"
+            if [ "$WIDTH" -ge 380 ] && [ "$WIDTH" -le 460 ] && [ "$HEIGHT" -ge 580 ] && [ "$HEIGHT" -le 700 ]; then pass "[$label] popup size is roughly 420x640"; else fail "[$label] popup size ${WIDTH}x${HEIGHT} is not roughly 420x640"; fi
+          else
+            fail "[$label] no visible window titled '$PRODUCT' after the second launch"
+          fi
+          alive && pass "[$label] the first instance is still alive after the second launch" || fail "[$label] the first instance died after the second launch"
+
+          xwininfo -root -tree > "$out/$label-xwininfo-after.txt" 2>&1
+          import -window root "$out/$label-screenshot.png" && pass "[$label] screenshot saved" || fail "[$label] screenshot failed"
+
+          if grep -q 'GET /api/oauth/usage auth=present' "$root/provider.log" 2>/dev/null; then pass "[$label] the app asked the fake Claude provider with a token"; else fail "[$label] the fake Claude provider saw no authorised request"; fi
+          if grep -q 'GET /backend-api/wham/usage auth=present' "$root/provider.log" 2>/dev/null; then pass "[$label] the app asked the fake Codex provider with a token"; else fail "[$label] the fake Codex provider saw no authorised request"; fi
+
+          pkill -f "$PAT" 2>/dev/null; kill "$PID" 2>/dev/null; sleep 1; pkill -9 -f "$PAT" 2>/dev/null
+          kill "$OB" 2>/dev/null
+          [ -n "${FAKE_PID:-}" ] && kill "$FAKE_PID" 2>/dev/null
+          [ -f "$root/provider.log" ] && cp "$root/provider.log" "$out/$label-provider.log"
+          find "$root" -type f | sed "s|^$root||" > "$out/$label-synthetic-files.txt"
+          if [ "$fails" -gt 0 ]; then echo "RESULT [$label]: FAIL ($fails check(s) failed)"; exit 1; fi
+          echo "RESULT [$label]: PASS"
+
+          SMOKE_EOF
+          chmod +x "$RUNNER_TEMP/smoke/smoke.sh"
+
+      - name: Smoke test the installed .deb
+        id: deb
+        run: |
+          deb=$(ls src-tauri/target/release/bundle/deb/*.deb | head -n 1)
+          echo "deb: $deb"
+          sudo apt-get install -y "./$deb"
+          pkg=$(dpkg-deb -f "$deb" Package)
+          bin=$(dpkg -L "$pkg" | grep '^/usr/bin/' | head -n 1)
+          echo "package: $pkg, installed binary: $bin"
+          if [ ! -x "$bin" ]; then echo "FAIL: no executable under /usr/bin in the package"; exit 1; fi
+          export BINNAME=$(basename "$bin")
+          echo "BINNAME=$BINNAME" >> "$GITHUB_ENV"
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-launch --exit-with-session bash "$RUNNER_TEMP/smoke/smoke.sh" deb "$bin"
+
+      - name: Smoke test the AppImage (extract and run, no FUSE)
+        if: always()
+        run: |
+          app=$(ls "$PWD"/src-tauri/target/release/bundle/appimage/*.AppImage | head -n 1)
+          echo "appimage: $app"
+          chmod +x "$app"
+          export BINNAME="${BINNAME:-$SLUG}"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-launch --exit-with-session bash "$RUNNER_TEMP/smoke/smoke.sh" appimage "$app" --appimage-extract-and-run
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-linux
+          path: ${{ runner.temp }}/smoke-out
+          if-no-files-found: warn
+
+  windows:
+    name: Windows (NSIS installer)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT: 'Usage Bar'
+      SLUG: 'usage-bar-cross'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Build the release installer (same as release.yml)
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Install silently, run, probe, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'smoke-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $root = Join-Path $env:RUNNER_TEMP ('smoke-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $script:fails = 0
+          function Pass($m) { Write-Host "PASS: $m" }
+          function Fail($m) { Write-Host "FAIL: $m"; $script:fails++ }
+          function Warn($m) { Write-Host "WARN: $m" }
+          function Check($ok, $m) { if ($ok) { Pass $m } else { Fail $m } }
+
+          # P/Invoke: top-level windows of one process id, with title, visibility and size
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class WinProbe {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+            public static string[] ForPids(uint[] pids) {
+              var res = new List<string>();
+              var set = new HashSet<uint>(pids);
+              EnumWindows((h, l) => {
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                if (!set.Contains(pid)) return true;
+                var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+                RECT r; GetWindowRect(h, out r);
+                res.Add(pid + "|" + (IsWindowVisible(h) ? "1" : "0") + "|" + (r.R - r.L) + "|" + (r.B - r.T) + "|" + sb.ToString());
+                return true;
+              }, IntPtr.Zero);
+              return res.ToArray();
+            }
+          }
+          "@
+
+          function Find-Exe {
+            $roots = @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ -and (Test-Path $_) }
+            foreach ($r in $roots) {
+              $dirs = Get-ChildItem -Path $r -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*$env:PRODUCT*" -or $_.Name -like "*$env:SLUG*" }
+              foreach ($d in $dirs) {
+                $exe = Get-ChildItem -Path $d.FullName -Filter *.exe -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'unins|uninstall' } | Select-Object -First 1
+                if ($exe) { return $exe }
+              }
+            }
+            return $null
+          }
+
+          # 1. install silently
+          $installer = Get-ChildItem -Path 'src-tauri\target\release\bundle\nsis\*.exe' | Select-Object -First 1
+          Write-Host "installer: $($installer.FullName)"
+          $ip = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          Check ($ip.ExitCode -eq 0) "installer /S exited with code $($ip.ExitCode)"
+          $exe = Find-Exe
+          Check ($null -ne $exe) "installed exe found: $($exe.FullName)"
+          if ($null -eq $exe) {
+            Get-ChildItem -Path "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | Out-Host
+            Write-Host 'RESULT: FAIL'; exit 1
+          }
+          $installDir = $exe.DirectoryName
+          Get-ChildItem $installDir | Format-Table Name, Length | Out-Host
+
+          # 2. synthetic environment and a temp APPDATA
+          $env:APPDATA = Join-Path $root 'appdata'
+          New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\smoke" | Out-Null
+          Set-Content -Path "$env:RUNNER_TEMP\smoke\helper.py" -Encoding utf8 -Value @'
+          import http.server, json, os, sys, time, datetime
+          mode, arg = sys.argv[1], sys.argv[2]
+          if mode == "usage-creds":
+              root = arg
+              for d, name, body in (
+                  ("claude", ".credentials.json", {"claudeAiOauth": {"accessToken": "FAKE-CLAUDE-TOKEN-" + "a1" * 14, "expiresAt": int(time.time() * 1000) + 3600000, "subscriptionType": "max"}}),
+                  ("codex", "auth.json", {"tokens": {"access_token": "FAKE-CODEX-TOKEN-" + "x9" * 14, "account_id": "acct-fake-1"}}),
+              ):
+                  p = os.path.join(root, "creds", d); os.makedirs(p, exist_ok=True)
+                  f = os.path.join(p, name)
+                  with open(f, "w") as h: json.dump(body, h)
+                  try: os.chmod(f, 0o600)
+                  except OSError: pass
+          elif mode == "fake-provider":
+              class H(http.server.BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      now = int(time.time())
+                      iso = lambda s: datetime.datetime.fromtimestamp(s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                      if self.path.startswith("/api/oauth/usage"):
+                          body = {"five_hour": {"utilization": 85.0, "resets_at": iso(now + 8000)}, "seven_day": {"utilization": 40, "resets_at": iso(now + 300000)}}
+                      elif self.path.startswith("/backend-api/wham/usage"):
+                          body = {"plan_type": "plus", "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000, "reset_at": now + 3600}, "secondary_window": {"used_percent": 20, "limit_window_seconds": 604800, "reset_at": now + 90000}}}
+                      else:
+                          self.send_response(404); self.end_headers(); return
+                      data = json.dumps(body).encode()
+                      self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
+                      sys.stderr.write("GET %s auth=%s\n" % (self.path, "present" if self.headers.get("authorization") else "missing")); sys.stderr.flush()
+                  def log_message(self, *a): pass
+              http.server.HTTPServer(("127.0.0.1", int(arg)), H).serve_forever()
+          '@
+          $env:USAGEBAR_TEST = '1'
+          $env:USAGEBAR_DATA_DIR = Join-Path $root 'data'
+          New-Item -ItemType Directory -Force -Path $env:USAGEBAR_DATA_DIR | Out-Null
+          $env:USAGEBAR_CLAUDE_DIR = Join-Path $root 'creds\claude'
+          $env:USAGEBAR_CODEX_DIR = Join-Path $root 'creds\codex'
+          $env:USAGEBAR_API_BASE_CLAUDE = 'http://127.0.0.1:18765'
+          $env:USAGEBAR_API_BASE_CODEX = 'http://127.0.0.1:18765'
+          $env:HTTPS_PROXY = ''; $env:HTTP_PROXY = ''
+          python "$env:RUNNER_TEMP\smoke\helper.py" usage-creds $root
+          $fake = Start-Process -FilePath python -ArgumentList "`"$env:RUNNER_TEMP\smoke\helper.py`" fake-provider 18765" -PassThru -WindowStyle Hidden -RedirectStandardError "$out\windows-provider.log"
+          Start-Sleep -Seconds 1
+
+          # 3. first launch, wait 10 s, assert alive
+          $procName = [IO.Path]::GetFileNameWithoutExtension($exe.Name)
+          $p1 = Start-Process -FilePath $exe.FullName -PassThru -RedirectStandardOutput "$out\windows-app.out.log" -RedirectStandardError "$out\windows-app.err.log"
+          Start-Sleep -Seconds 10
+          $procs = @(Get-Process -Name $procName -ErrorAction SilentlyContinue)
+          Check ($procs.Count -ge 1) "process '$procName' is alive after 10 s ($($procs.Count) process(es))"
+          $pids = [uint32[]]($procs | ForEach-Object { $_.Id })
+          # WebView2 child processes belong to other pids; the main window belongs to the app pid
+          $before = @(if ($pids.Count) { [WinProbe]::ForPids($pids) })
+          Write-Host 'windows before the second launch (pid|visible|w|h|title):'
+          $before | ForEach-Object { Write-Host "  $_" }
+          $err = Get-Content "$out\windows-app.err.log" -Raw -ErrorAction SilentlyContinue
+          if ($err -match 'tray icon created') { Pass 'stderr says the tray icon was created' } else { Warn 'no "tray icon created" line in stderr (a windows-subsystem exe may not write to the redirected handle)' }
+
+          # 4. second launch = single-instance toggle: a visible popup window should appear
+          Start-Process -FilePath $exe.FullName | Out-Null
+          $popup = $null
+          for ($i = 0; $i -lt 30 -and -not $popup; $i++) {
+            Start-Sleep -Milliseconds 500
+            $procs = @(Get-Process -Name $procName -ErrorAction SilentlyContinue)
+            $pids = [uint32[]]($procs | ForEach-Object { $_.Id })
+            $w = @(if ($pids.Count) { [WinProbe]::ForPids($pids) })
+            $popup = $w | Where-Object { $f = $_ -split '\|', 5; $f[1] -eq '1' -and $f[4] -eq $env:PRODUCT } | Select-Object -First 1
+          }
+          Start-Sleep -Seconds 2
+          $mw = @(Get-Process -Name $procName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+          Write-Host ("Get-Process MainWindowTitle: " + (($mw | ForEach-Object { "'" + $_.MainWindowTitle + "'" }) -join ', '))
+          if ($popup) {
+            $f = $popup -split '\|', 5
+            Pass "popup window '$($f[4])' is visible, size $($f[2]) x $($f[3])"
+            Check (($f[2] -as [int]) -ge 380 -and ($f[2] -as [int]) -le 460 -and ($f[3] -as [int]) -ge 580 -and ($f[3] -as [int]) -le 700) "popup size is roughly 420 x 640 (accepting 380-460 x 580-700 at the runner's scale)"
+          } else {
+            Fail "no visible window titled '$env:PRODUCT' appeared after the second launch"
+          }
+          Check ($mw.Count -ge 1) 'Get-Process reports a main window handle after the second launch'
+          Check (@(Get-Process -Name $procName -ErrorAction SilentlyContinue).Count -ge 1) 'the first instance is still alive after the second launch'
+
+          # 5. screenshot of the whole screen
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("$out\windows-screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+            Pass "screenshot saved ($($b.Width) x $($b.Height))"
+          } catch { Fail "screenshot failed: $_" }
+
+          # 6. best effort: list notification-area icons through UI Automation (never fails the job)
+          try {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            $A = [System.Windows.Automation.AutomationElement]
+            $names = @('Notification Area', 'Overflow Notification Area', 'User Promoted Notification Area', 'System tray overflow window.', 'NotificationOverflow')
+            $found = @()
+            foreach ($n in $names) {
+              $c = New-Object System.Windows.Automation.PropertyCondition ($A::NameProperty), $n
+              $els = $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)
+              foreach ($el in $els) {
+                $bc = New-Object System.Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([System.Windows.Automation.ControlType]::Button)
+                $btns = $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)
+                Write-Host "UIA: container '$n' has $($btns.Count) button(s)"
+                foreach ($bt in $btns) { Write-Host "UIA:   icon '$($bt.Current.Name)'"; $found += $bt.Current.Name }
+              }
+            }
+            if ($found.Count -eq 0) { Write-Host 'UIA PROBE: no notification-area containers or icons found (the runner shell may not expose them)' }
+            elseif ($found | Where-Object { $_ -like "*$env:PRODUCT*" -or $_ -like "*$env:SLUG*" }) { Write-Host "UIA PROBE: found an icon for $env:PRODUCT" }
+            else { Write-Host "UIA PROBE: icons were listed but none is named like $env:PRODUCT (the tooltip may differ)" }
+          } catch { Write-Host "UIA PROBE failed (best effort, ignored): $_" }
+
+          # 7. stop the app and uninstall
+          Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $un = Get-ChildItem -Path $installDir -Filter *.exe -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'unins|uninstall' } | Select-Object -First 1
+          if ($un) {
+            $up = Start-Process -FilePath $un.FullName -ArgumentList '/S' -Wait -PassThru
+            Write-Host "uninstaller exit code $($up.ExitCode)"
+            for ($i = 0; $i -lt 30 -and (Test-Path $exe.FullName); $i++) { Start-Sleep -Seconds 1 }
+            Check (-not (Test-Path $exe.FullName)) 'the app exe is gone after the silent uninstall'
+          } else { Fail "no uninstaller found in $installDir" }
+
+          # data written by the app (informational)
+          if ($fake) { Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }
+          $plog = Get-Content "$out\windows-provider.log" -Raw -ErrorAction SilentlyContinue
+          Check ($plog -match 'GET /api/oauth/usage auth=present') 'the app asked the fake Claude provider with a token'
+          Check ($plog -match 'GET /backend-api/wham/usage auth=present') 'the app asked the fake Codex provider with a token'
+          Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($root.Length) } | Out-File "$out\windows-synthetic-files.txt"
+          if ($script:fails -gt 0) { Write-Host "RESULT: FAIL ($($script:fails) check(s) failed)"; exit 1 }
+          Write-Host 'RESULT: PASS'
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-windows
+          path: ${{ runner.temp }}/smoke-out
+          if-no-files-found: warn
+
+  macos:
+    name: macOS (.dmg)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT: 'Usage Bar'
+      SLUG: 'usage-bar-cross'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Build the release dmg (same as release.yml)
+        run: npm run tauri build -- --bundles dmg
+
+      - name: Mount, copy the app, run it, screenshot
+        run: |
+          set +e
+          out="$RUNNER_TEMP/smoke-out"; mkdir -p "$out" "$RUNNER_TEMP/smoke"
+          fails=0; label=macos
+          pass() { echo "PASS: $*"; }
+          fail() { echo "FAIL: $*"; fails=$((fails+1)); }
+          warn() { echo "WARN: $*"; }
+          cat > "$RUNNER_TEMP/smoke/helper.py" <<'HELPER_EOF'
+          import http.server, json, os, sys, time, datetime
+          mode, arg = sys.argv[1], sys.argv[2]
+          if mode == "usage-creds":
+              root = arg
+              for d, name, body in (
+                  ("claude", ".credentials.json", {"claudeAiOauth": {"accessToken": "FAKE-CLAUDE-TOKEN-" + "a1" * 14, "expiresAt": int(time.time() * 1000) + 3600000, "subscriptionType": "max"}}),
+                  ("codex", "auth.json", {"tokens": {"access_token": "FAKE-CODEX-TOKEN-" + "x9" * 14, "account_id": "acct-fake-1"}}),
+              ):
+                  p = os.path.join(root, "creds", d); os.makedirs(p, exist_ok=True)
+                  f = os.path.join(p, name)
+                  with open(f, "w") as h: json.dump(body, h)
+                  try: os.chmod(f, 0o600)
+                  except OSError: pass
+          elif mode == "fake-provider":
+              class H(http.server.BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      now = int(time.time())
+                      iso = lambda s: datetime.datetime.fromtimestamp(s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                      if self.path.startswith("/api/oauth/usage"):
+                          body = {"five_hour": {"utilization": 85.0, "resets_at": iso(now + 8000)}, "seven_day": {"utilization": 40, "resets_at": iso(now + 300000)}}
+                      elif self.path.startswith("/backend-api/wham/usage"):
+                          body = {"plan_type": "plus", "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000, "reset_at": now + 3600}, "secondary_window": {"used_percent": 20, "limit_window_seconds": 604800, "reset_at": now + 90000}}}
+                      else:
+                          self.send_response(404); self.end_headers(); return
+                      data = json.dumps(body).encode()
+                      self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
+                      sys.stderr.write("GET %s auth=%s\n" % (self.path, "present" if self.headers.get("authorization") else "missing")); sys.stderr.flush()
+                  def log_message(self, *a): pass
+              http.server.HTTPServer(("127.0.0.1", int(arg)), H).serve_forever()
+          HELPER_EOF
+          cat > "$RUNNER_TEMP/smoke/prep.sh" <<'PREP_EOF'
+          prep_env() {
+            export USAGEBAR_TEST=1 USAGEBAR_DATA_DIR="$1/data" USAGEBAR_CLAUDE_DIR="$1/creds/claude" USAGEBAR_CODEX_DIR="$1/creds/codex"
+            export USAGEBAR_API_BASE_CLAUDE=http://127.0.0.1:18765 USAGEBAR_API_BASE_CODEX=http://127.0.0.1:18765 HTTPS_PROXY= HTTP_PROXY=
+            mkdir -p "$USAGEBAR_DATA_DIR"
+            python3 "$RUNNER_TEMP/smoke/helper.py" usage-creds "$1"
+            python3 "$RUNNER_TEMP/smoke/helper.py" fake-provider 18765 >"$1/provider.log" 2>&1 &
+            FAKE_PID=$!
+            sleep 1
+          }
+          PREP_EOF
+
+          dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          echo "dmg: $dmg"
+          mnt="$RUNNER_TEMP/dmg-mount"; mkdir -p "$mnt"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt" || fail "hdiutil attach failed"
+          src=$(ls -d "$mnt"/*.app | head -n 1)
+          dest=$(mktemp -d /tmp/smoke-app.XXXXXX)
+          cp -R "$src" "$dest/" || fail "copying the .app failed"
+          hdiutil detach "$mnt" -force >/dev/null 2>&1
+          app=$(ls -d "$dest"/*.app | head -n 1)
+          xattr -cr "$app" 2>/dev/null
+          bin=$(ls "$app"/Contents/MacOS/* | head -n 1)
+          echo "app: $app, binary: $bin"
+          [ -x "$bin" ] && pass "the .app was copied out of the dmg and has an executable" || fail "no executable in the app"
+
+          root=$(mktemp -d); export HOME="$root/home"; mkdir -p "$HOME"
+          . "$RUNNER_TEMP/smoke/prep.sh"; prep_env "$root"
+
+          "$bin" >"$out/macos-app.out.log" 2>"$out/macos-app.err.log" &
+          PID=$!
+          sleep 10
+          if kill -0 $PID 2>/dev/null; then pass "process $PID is alive after 10 s"; else fail "the app is not running after 10 s"; fi
+          if grep -q 'tray icon created' "$out/macos-app.err.log"; then pass 'stderr says the tray icon was created'; else fail 'no "tray icon created" line in stderr'; fi
+          "$bin" >/dev/null 2>&1 &
+          sleep 5
+          kill -0 $PID 2>/dev/null && pass 'the first instance survived the second launch (single instance)' || fail 'the first instance died after the second launch'
+          screencapture -x "$out/macos-screenshot.png" && pass 'screenshot saved' || warn 'screencapture failed (the runner may lack screen recording permission)'
+          if grep -q 'GET /api/oauth/usage auth=present' "$root/provider.log" 2>/dev/null; then pass "[$label] the app asked the fake Claude provider with a token"; else fail "[$label] the fake Claude provider saw no authorised request"; fi
+          if grep -q 'GET /backend-api/wham/usage auth=present' "$root/provider.log" 2>/dev/null; then pass "[$label] the app asked the fake Codex provider with a token"; else fail "[$label] the fake Codex provider saw no authorised request"; fi
+          kill $PID 2>/dev/null; sleep 1; kill -9 $PID 2>/dev/null
+          [ -n "${FAKE_PID:-}" ] && kill "$FAKE_PID" 2>/dev/null
+          find "$root" -type f | sed "s|^$root||" > "$out/macos-synthetic-files.txt"
+          [ -f "$root/provider.log" ] && cp "$root/provider.log" "$out/macos-provider.log"
+          if [ "$fails" -gt 0 ]; then echo "RESULT: FAIL ($fails check(s) failed)"; exit 1; fi
+          echo "RESULT: PASS"
+
+      - name: Upload screenshot and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-macos
+          path: ${{ runner.temp }}/smoke-out
+          if-no-files-found: warn
