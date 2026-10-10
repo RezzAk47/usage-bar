@@ -392,6 +392,49 @@ fn write_waiting(
     result.map_err(|e| format!("could not write {name}: {e}"))
 }
 
+/// A crash between creating the temp file and the rename leaves `.<name>.tmp-<pid>-<nanos>` behind. This removes such leftovers
+/// for the data files, at startup. Only regular files (never links) whose name is exactly that shape for a valid data file name,
+/// and whose last change is older than `min_age` (a write in progress in another instance is younger). Returns how many went.
+pub fn clean_stale_temp(dir: &Path, now: std::time::SystemTime, min_age: Duration) -> usize {
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in rd.flatten() {
+        let fname = entry.file_name();
+        let Some(fname) = fname.to_str() else {
+            continue;
+        };
+        let Some(rest) = fname.strip_prefix('.') else {
+            continue;
+        };
+        let Some((name, tail)) = rest.split_once(".tmp-") else {
+            continue;
+        };
+        let digits = |x: &str| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit());
+        let shaped = valid_name(name)
+            && tail
+                .split_once('-')
+                .is_some_and(|(pid, nanos)| digits(pid) && digits(nanos));
+        if !shaped {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if old && fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Keeps an unreadable file as a backup: renames it (or the link itself) to a UNIQUE `.broken-` name in the same folder.
 /// The final name is the requested one plus a unique suffix, so nothing (not even a dangling symlink) is ever overwritten.
 /// Returns the name it used.
@@ -426,6 +469,48 @@ pub fn move_aside(dir: &Path, name: &str, backup: &str) -> Result<String, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_temp_files_of_the_data_files_are_removed_and_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let stale = [
+            ".settings.json.tmp-123-456789",
+            ".usage-alerts.json.tmp-9-1",
+        ];
+        let keep = [
+            "settings.json",
+            "settings.json.lock",
+            ".settings.json.tmp-abc-1",
+            ".other.json.tmp-1-2",
+            ".settings.json.tmp-1",
+            "notes.tmp-1-2",
+            ".settings.json.tmp-1-2.bak",
+        ];
+        for n in stale.iter().chain(keep.iter()) {
+            fs::write(d.path().join(n), "x").unwrap();
+        }
+        fs::create_dir(d.path().join(".usage-history.json.tmp-1-2")).unwrap();
+        let now = std::time::SystemTime::now();
+        // fresh files (a write may be running right now) are left alone
+        assert_eq!(clean_stale_temp(d.path(), now, Duration::from_secs(60)), 0);
+        // two minutes later they count as stale
+        let later = now + Duration::from_secs(120);
+        assert_eq!(
+            clean_stale_temp(d.path(), later, Duration::from_secs(60)),
+            2
+        );
+        for n in stale {
+            assert!(!d.path().join(n).exists(), "{n}");
+        }
+        for n in keep {
+            assert!(d.path().join(n).exists(), "{n}");
+        }
+        assert!(d.path().join(".usage-history.json.tmp-1-2").is_dir());
+        assert_eq!(
+            clean_stale_temp(&d.path().join("missing"), later, Duration::ZERO),
+            0
+        );
+    }
 
     #[test]
     fn names_are_checked() {

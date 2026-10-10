@@ -455,6 +455,15 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon
             build_tray(app.handle())?;
+            // a crash in the middle of a write leaves a temp file behind: remove the old ones
+            let n = files::clean_stale_temp(
+                &app.state::<AppState>().data_dir,
+                std::time::SystemTime::now(),
+                Duration::from_secs(60),
+            );
+            if n > 0 {
+                eprintln!("usage-bar: removed {n} stale temp file(s)");
+            }
             eprintln!(
                 "usage-bar: tray icon created; data folder {}",
                 app.state::<AppState>().data_dir.display()
