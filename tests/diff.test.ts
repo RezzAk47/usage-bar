@@ -41,7 +41,10 @@ describe.skipIf(files.length === 0)('differential against the Mac model', () => 
         if (got === r.out) continue;
         const nonAscii = /[^\x00-\x7f]/.test(r.text);
         const dst = got !== null && r.out !== null && Math.abs(got - r.out) === 3600;
-        if (!(nonAscii || dst)) unexplained++;
+        // known difference: the Mac model picks the occurrence NEAREST to now, this app the NEXT one after now, so for a time
+        // without a date that already passed today it is one day (give or take a DST hour) later, and always ahead of now
+        const nextNotNearest = got !== null && r.out !== null && !/\bon\b/i.test(r.text) && got > r.now && Math.abs(got - r.out - 86400) <= 3600;
+        if (!(nonAscii || dst || nextNotNearest)) unexplained++;
       }
       expect(unexplained).toBe(0);
     });

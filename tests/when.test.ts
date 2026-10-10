@@ -39,11 +39,16 @@ describe('zones, DST and reset text', () => {
     expect(parseResetText('resets 17:19', at(2026, 10, 7, 15, 0), VAN)).toBe(at(2026, 10, 7, 17, 19));
     expect(parseResetText('resets 02:10', at(2026, 10, 7, 23, 50), VAN)).toBe(at(2026, 10, 8, 2, 10));
   });
-  it('a reset that just passed stays in the past', () => {
+  it('a time that has just passed today means the same time tomorrow', () => {
     const now = at(2026, 10, 7, 17, 25);
-    const r = parseResetText('resets 17:19', now, VAN)!;
-    expect(r).toBeLessThan(now);
-    expect(countdown(r, now)).toBe('resetting');
+    expect(parseResetText('resets 17:19', now, VAN)).toBe(at(2026, 10, 8, 17, 19));
+    expect(parseResetText('resets 17:25', now, VAN)).toBe(at(2026, 10, 8, 17, 25)); // exactly now is not "after now"
+    expect(parseResetText('resets 17:26', now, VAN)).toBe(at(2026, 10, 7, 17, 26));
+  });
+  it('time only: the next occurrence is the day after in the zone, not in UTC (late evening in Vancouver is already tomorrow in UTC)', () => {
+    const now = at(2026, 10, 7, 22, 0, VAN); // 05:00 UTC on the 8th
+    expect(parseResetText('resets 21:00', now, VAN)).toBe(at(2026, 10, 8, 21, 0));
+    expect(parseResetText('resets 23:00', now, VAN)).toBe(at(2026, 10, 7, 23, 0));
   });
   it('with a day, and across the year boundary', () => {
     expect(parseResetText('resets 09:00 on 9 Oct', at(2026, 10, 7, 15, 0), VAN)).toBe(at(2026, 10, 9, 9, 0));
@@ -61,6 +66,18 @@ describe('zones, DST and reset text', () => {
   it('fall back: that night is 25 hours long, so 22:00 -> 09:00 is 12 h', () => {
     const now = at(2026, 10, 24, 22, 0, BER);
     expect(countdown(parseResetText('resets 09:00 on 25 Oct', now, BER), now)).toBe('in 12 h');
+  });
+  it('time only across DST: the next 09:00 after the spring-forward night is 10 h away, after the fall-back night 12 h', () => {
+    const spring = at(2026, 3, 28, 22, 0, BER);
+    expect(countdown(parseResetText('resets 09:00', spring, BER), spring)).toBe('in 10 h');
+    const fall = at(2026, 10, 24, 22, 0, BER);
+    expect(countdown(parseResetText('resets 09:00', fall, BER), fall)).toBe('in 12 h');
+  });
+  it('time only in the repeated hour of the fall-back night: the second 02:30 is still ahead', () => {
+    const firstPass = Date.UTC(2026, 9, 25, 0, 45) / 1000; // 02:45 CEST, the first time the clock shows 02:xx
+    expect(parseResetText('resets 02:30', firstPass, BER)).toBe(Date.UTC(2026, 9, 25, 1, 30) / 1000); // 02:30 CET, 45 min later
+    const secondPass = Date.UTC(2026, 9, 25, 1, 45) / 1000;
+    expect(parseResetText('resets 02:30', secondPass, BER)).toBe(Date.UTC(2026, 9, 26, 1, 30) / 1000);
   });
   it('a time in the DST gap lands after the gap, not on a missing time', () => {
     const e = at(2026, 3, 29, 2, 30, BER);

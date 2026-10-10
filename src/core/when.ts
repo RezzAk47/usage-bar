@@ -72,20 +72,28 @@ const offsetAt = (epoch: number, tz?: string): number => {
  * exist (DST gap) lands on the instant after the gap. Never loops, so it cannot oscillate at a transition.
  */
 export function zonedToEpoch(y: number, mo: number, d: number, h: number, mi: number, tz?: string): number | null {
+  const all = zonedAll(y, mo, d, h, mi, tz);
+  return all.length ? all[0] : null;
+}
+
+/** Every instant that shows this wall-clock time in `tz`, earliest first: two in the repeated hour of a fall-back night, one
+ *  normally, and for a time in a spring-forward gap the single instant after the gap. */
+function zonedAll(y: number, mo: number, d: number, h: number, mi: number, tz?: string): number[] {
   const naive = Date.UTC(y, mo - 1, d, h, mi, 0) / 1000;
-  if (!Number.isFinite(naive)) return null;
+  if (!Number.isFinite(naive)) return [];
   const offsets = [...new Set([offsetAt(naive - 86400, tz), offsetAt(naive, tz), offsetAt(naive + 86400, tz)])];
   const cands = offsets.map((o) => naive - o);
-  const real = cands.filter((c) => offsetAt(c, tz) === naive - c);
-  return real.length ? Math.min(...real) : Math.max(...cands);
+  const real = cands.filter((c) => offsetAt(c, tz) === naive - c).sort((a, b) => a - b);
+  return real.length ? real : [Math.max(...cands)];
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
- * Reset TEXT ("resets 17:19", "resets 09:00 on 9 Oct", local time) to epoch seconds: of the candidate days the one nearest
- * to `now` wins, so a reset that passed a minute ago stays in the past instead of jumping a day ahead.
+ * Reset TEXT ("resets 17:19", "resets 09:00 on 9 Oct", local time) to epoch seconds. A time without a date is the NEXT occurrence
+ * after `now` in `tz` (today if it is still ahead, else tomorrow; in the repeated hour of a fall-back night the second
+ * occurrence counts too). With a date, the year nearest to `now` wins.
  */
 export function parseResetText(text: unknown, now: number, tz?: string): number | null {
   if (typeof text !== 'string' || text.length > 120 || !isFiniteNumber(now)) return null;
@@ -105,11 +113,12 @@ export function parseResetText(text: unknown, now: number, tz?: string): number 
       if (e !== null) cands.push(e);
     }
   } else {
-    for (const delta of [-1, 0, 1]) {
+    for (const delta of [0, 1, 2]) {
       const dt = new Date(Date.UTC(today.y, today.mo - 1, today.d + delta));
-      const e = zonedToEpoch(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate(), hour, minute, tz);
-      if (e !== null) cands.push(e);
+      cands.push(...zonedAll(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate(), hour, minute, tz));
     }
+    const next = cands.filter((c) => c > now);
+    return next.length ? Math.min(...next) : null;
   }
   if (cands.length === 0) return null;
   return cands.reduce((a, b) => (Math.abs(b - now) < Math.abs(a - now) ? b : a));
