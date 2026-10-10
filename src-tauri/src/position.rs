@@ -337,3 +337,33 @@ mod tests {
         );
     }
 }
+
+/// The size to place the popup with. `outer_size()` read straight after `set_size` can still be the OLD (tiny, hidden) window
+/// size on Linux/GTK, which put the popup at x = screen width - 42, mostly off screen. A window can be larger than the size we
+/// asked for (a title bar or border) but never smaller, so take the larger of the two per axis.
+pub fn settled_size(outer: Option<(i32, i32)>, requested: (i32, i32)) -> (i32, i32) {
+    match outer {
+        Some((w, h)) => (w.max(requested.0), h.max(requested.1)),
+        None => requested,
+    }
+}
+
+#[cfg(test)]
+mod settled_size_tests {
+    use super::settled_size;
+
+    #[test]
+    fn a_stale_small_outer_size_never_wins_over_the_requested_size() {
+        assert_eq!(settled_size(Some((42, 30)), (420, 640)), (420, 640));
+    }
+
+    #[test]
+    fn a_window_with_a_border_keeps_its_larger_outer_size() {
+        assert_eq!(settled_size(Some((436, 679)), (420, 640)), (436, 679));
+    }
+
+    #[test]
+    fn no_outer_size_uses_the_requested_one() {
+        assert_eq!(settled_size(None, (420, 640)), (420, 640));
+    }
+}

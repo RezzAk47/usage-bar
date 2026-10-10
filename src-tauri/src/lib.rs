@@ -33,7 +33,8 @@ use tauri::{
 use creds::Provider;
 use datadir::Os;
 use position::{
-    fallback_corner, popup_height_logical, popup_position, popup_width_logical, usable_icon, Rect,
+    fallback_corner, popup_height_logical, popup_position, popup_width_logical, settled_size,
+    usable_icon, Rect,
 };
 
 const MARGIN: i32 = 8;
@@ -311,10 +312,16 @@ fn size_and_place(app: &AppHandle, win: &WebviewWindow, icon: Option<Rect>) {
         popup_height_logical(work.h, scale, MARGIN),
     );
     let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
-    let size = win
-        .outer_size()
-        .map(|s| (s.width as i32, s.height as i32))
-        .unwrap_or(((w as f64 * scale) as i32, (h as f64 * scale) as i32));
+    let requested = (
+        (w as f64 * scale).round() as i32,
+        (h as f64 * scale).round() as i32,
+    );
+    let size = settled_size(
+        win.outer_size()
+            .ok()
+            .map(|s| (s.width as i32, s.height as i32)),
+        requested,
+    );
     let margin = (MARGIN as f64 * scale).round() as i32;
     let (x, y) = popup_position(
         icon,
