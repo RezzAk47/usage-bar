@@ -58,7 +58,14 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
         n(14..16)?,
         n(17..19)?,
     );
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 60 {
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days = match mo {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=12).contains(&mo) || !(1..=month_days).contains(&d) || h > 23 || mi > 59 || sec > 60 {
         return None;
     }
     let mut rest = &s[19..];
@@ -73,9 +80,16 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
     }
     let off = match rest {
         "" | "Z" | "z" => 0,
-        o if (o.starts_with('+') || o.starts_with('-')) && o.len() >= 3 => {
+        // exactly +HH, +HHMM or +HH:MM (nothing after it)
+        o if (o.starts_with('+') || o.starts_with('-'))
+            && matches!(o.len(), 3 | 5 | 6)
+            && (o.len() != 6 || o.as_bytes()[3] == b':') =>
+        {
             let sign = if o.starts_with('-') { -1 } else { 1 };
-            let d = o[1..].replace(':', "");
+            let d = o[1..].replacen(':', "", 1);
+            if !matches!(d.len(), 2 | 4) || !d.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let (oh, om) = (
                 d.get(0..2)?.parse::<i64>().ok()?,
                 d.get(2..4).map_or(Some(0), |x| x.parse::<i64>().ok())?,
@@ -534,6 +548,13 @@ mod tests {
             json!({}),
             json!("2030-13-01T00:00:00Z"),
             json!(""),
+            // a day the month does not have would roll into the next month; trailing junk after the offset is not a time
+            json!("2030-02-31T00:00:00Z"),
+            json!("2031-02-29T00:00:00Z"),
+            json!("2030-04-31T00:00:00Z"),
+            json!("2030-03-17T19:46:40+02:00junk"),
+            json!("2030-03-17T19:46:40+0"),
+            json!("2030-03-17T19:46:40+02:0"),
         ] {
             assert_eq!(parse_expiry(&junk), None, "{junk}");
         }
