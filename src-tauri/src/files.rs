@@ -758,17 +758,28 @@ mod tests {
     /// Another program holds `<file>.lock` for longer than the wait: the write is refused with a clear error. It used to go
     /// ahead WITHOUT the lock after the wait (after the page had already been told the save timed out), so the other program's
     /// read-check-write could interleave with ours.
-    // Not run on Windows: opening the lock file there fails with "Access is denied" (the previous write's lock file is still
-    // delete-pending), so the test cannot set up its holder. The refusal itself is not verified on Windows.
-    #[cfg(not(windows))]
     #[test]
     fn a_lock_held_elsewhere_refuses_the_write_instead_of_writing_unlocked() {
         let d = tempfile::tempdir().unwrap();
         write(d.path(), "settings.json", "old", None).unwrap();
-        let holder = fs::OpenOptions::new()
-            .append(true)
-            .open(d.path().join("settings.json.lock"))
-            .unwrap();
+        // the same open the production lock uses (create + append), retried: on Windows the previous write's lock file can be
+        // briefly delete-pending, and opening it then fails with "Access is denied" until the system has let go of it
+        let lock_path = d.path().join("settings.json.lock");
+        let mut tries = 0;
+        let holder = loop {
+            match fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&lock_path)
+            {
+                Ok(f) => break f,
+                Err(_) if tries < 100 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("cannot open the lock file: {e}"),
+            }
+        };
         holder.lock().unwrap();
         let e = write_waiting(
             d.path(),
