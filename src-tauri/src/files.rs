@@ -288,6 +288,7 @@ impl Lock {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(PathBuf::from(lock_path))
         else {
             return Ok(Lock(None));
@@ -875,6 +876,7 @@ mod tests {
                 .create(true)
                 .read(true)
                 .write(true)
+                .truncate(false)
                 .open(&lock_path)
             {
                 Ok(f) => break f,
