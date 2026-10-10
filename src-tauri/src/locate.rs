@@ -273,16 +273,17 @@ mod tests {
             "PATH",
             format!(".::relative/dir:{}", "/nonexistent"),
         )]);
+        // the working directory is process-wide (other tests run in parallel): set it back before the folder is deleted
+        let was = std::env::current_dir().unwrap();
         std::env::set_current_dir(cwd.path()).unwrap();
-        assert_eq!(
-            find_codex(
-                Os::Linux,
-                &e,
-                &other_home.path().display().to_string(),
-                None
-            ),
-            None
+        let found = find_codex(
+            Os::Linux,
+            &e,
+            &other_home.path().display().to_string(),
+            None,
         );
+        std::env::set_current_dir(was).unwrap();
+        assert_eq!(found, None);
         // PATH wins over the extra folders
         let first = d.path().join("first/codex");
         exe(&first);
