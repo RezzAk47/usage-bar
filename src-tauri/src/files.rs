@@ -33,13 +33,26 @@ pub struct Stamp {
 
 /// `^(settings|usage-alerts|usage-history|usage-backoff)(\.broken-[0-9a-z-]{1,40})?\.json$`, written out by hand (no regex crate needed).
 pub fn valid_name(name: &str) -> bool {
-    let Some(rest) = ["settings", "usage-alerts", "usage-history", "usage-backoff"].iter().find_map(|p| name.strip_prefix(p)) else { return false };
-    let Some(mid) = rest.strip_suffix(".json") else { return false };
+    let Some(rest) = ["settings", "usage-alerts", "usage-history", "usage-backoff"]
+        .iter()
+        .find_map(|p| name.strip_prefix(p))
+    else {
+        return false;
+    };
+    let Some(mid) = rest.strip_suffix(".json") else {
+        return false;
+    };
     if mid.is_empty() {
         return true;
     }
     match mid.strip_prefix(".broken-") {
-        Some(tail) => !tail.is_empty() && tail.len() <= 40 && tail.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-'),
+        Some(tail) => {
+            !tail.is_empty()
+                && tail.len() <= 40
+                && tail
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-')
+        }
         None => false,
     }
 }
@@ -91,14 +104,24 @@ fn plan_target(p: &Path, name: &str) -> Result<Target, String> {
     let base = p.parent().ok_or("no folder for the file")?.to_path_buf();
     let meta = match fs::symlink_metadata(p) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Target { path: p.to_path_buf(), temp_dir: base, identity: None }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Target {
+                path: p.to_path_buf(),
+                temp_dir: base,
+                identity: None,
+            })
+        }
         Err(e) => return Err(format!("cannot look at {name}: {e}")),
     };
     if meta.file_type().is_symlink() {
         return Err(format!("{name} {LINK_REFUSED}; nothing was written"));
     }
     if meta.is_file() {
-        return Ok(Target { path: p.to_path_buf(), temp_dir: base, identity: Some(identity_of(&meta)) });
+        return Ok(Target {
+            path: p.to_path_buf(),
+            temp_dir: base,
+            identity: Some(identity_of(&meta)),
+        });
     }
     Err(format!("{name} is not a regular file; nothing was written"))
 }
@@ -129,14 +152,23 @@ fn stamp_of(m: &fs::Metadata) -> Stamp {
     #[cfg(unix)]
     let (ctime_us, ino) = {
         use std::os::unix::fs::MetadataExt;
-        (m.ctime() * 1_000_000 + m.ctime_nsec() / 1000, m.ino().to_string())
+        (
+            m.ctime() * 1_000_000 + m.ctime_nsec() / 1000,
+            m.ino().to_string(),
+        )
     };
     #[cfg(not(unix))]
     let (ctime_us, ino) = (us(m.created()), String::new());
-    Stamp { size: m.len(), mtime_us: us(m.modified()), ctime_us, ino }
+    Stamp {
+        size: m.len(),
+        mtime_us: us(m.modified()),
+        ctime_us,
+        ino,
+    }
 }
 
-pub const NOT_UTF8: &str = "is not UTF-8 text; if you saved it as UTF-16 (some Windows editors do) save it again as UTF-8";
+pub const NOT_UTF8: &str =
+    "is not UTF-8 text; if you saved it as UTF-16 (some Windows editors do) save it again as UTF-8";
 
 /// Looks at the final component without following a link: a link or anything but a regular file is refused by name.
 fn regular_meta(p: &Path, name: &str) -> Result<Option<fs::Metadata>, String> {
@@ -153,9 +185,14 @@ fn regular_meta(p: &Path, name: &str) -> Result<Option<fs::Metadata>, String> {
 /// The file is looked at first (a link, a fifo, a device are refused), then opened without following links and without blocking.
 pub fn read(dir: &Path, name: &str) -> Result<Option<String>, String> {
     let p = resolve(dir, name)?;
-    let Some(meta) = regular_meta(&p, name)? else { return Ok(None) };
+    let Some(meta) = regular_meta(&p, name)? else {
+        return Ok(None);
+    };
     if meta.len() > MAX_READ_BYTES {
-        return Err(format!("{name} is larger than {} MB; it is not loaded", MAX_READ_BYTES / 1024 / 1024));
+        return Err(format!(
+            "{name} is larger than {} MB; it is not loaded",
+            MAX_READ_BYTES / 1024 / 1024
+        ));
     }
     let mut opts = fs::OpenOptions::new();
     opts.read(true);
@@ -172,16 +209,25 @@ pub fn read(dir: &Path, name: &str) -> Result<Option<String>, String> {
                 Ok(m) if m.is_file() && identity_of(&m) == identity_of(&meta) => {}
                 _ => return Err(format!("{name} changed while it was being opened")),
             }
-            f.take(MAX_READ_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("cannot read {name}: {e}"))?;
+            f.take(MAX_READ_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("cannot read {name}: {e}"))?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("cannot read {name}: {e}")),
     }
     if bytes.len() as u64 > MAX_READ_BYTES {
-        return Err(format!("{name} is larger than {} MB; it is not loaded", MAX_READ_BYTES / 1024 / 1024));
+        return Err(format!(
+            "{name} is larger than {} MB; it is not loaded",
+            MAX_READ_BYTES / 1024 / 1024
+        ));
     }
-    let slice = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&bytes);
-    String::from_utf8(slice.to_vec()).map(Some).map_err(|_| format!("{name} {NOT_UTF8}"))
+    let slice = bytes
+        .strip_prefix(&[0xEF, 0xBB, 0xBF][..])
+        .unwrap_or(&bytes);
+    String::from_utf8(slice.to_vec())
+        .map(Some)
+        .map_err(|_| format!("{name} {NOT_UTF8}"))
 }
 
 pub fn stat(dir: &Path, name: &str) -> Result<Option<Stamp>, String> {
@@ -201,7 +247,11 @@ pub fn is_transient(e: &std::io::Error) -> bool {
 pub const RETRY_DELAYS_MS: [u64; 5] = [20, 50, 100, 200, 400];
 
 /// Runs `op`, retrying after each delay while it fails with a transient error. `sleep` is injectable for tests.
-pub fn retry_transient<T>(mut op: impl FnMut() -> std::io::Result<T>, delays_ms: &[u64], mut sleep: impl FnMut(Duration)) -> std::io::Result<T> {
+pub fn retry_transient<T>(
+    mut op: impl FnMut() -> std::io::Result<T>,
+    delays_ms: &[u64],
+    mut sleep: impl FnMut(Duration),
+) -> std::io::Result<T> {
     let mut i = 0;
     loop {
         match op() {
@@ -222,12 +272,20 @@ struct Lock(Option<fs::File>);
 impl Lock {
     fn take(target: &Path) -> Lock {
         let lock_path = PathBuf::from(format!("{}.lock", target.display()));
-        let Ok(f) = fs::OpenOptions::new().create(true).append(true).open(&lock_path) else { return Lock(None) };
+        let Ok(f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&lock_path)
+        else {
+            return Lock(None);
+        };
         let t0 = std::time::Instant::now();
         loop {
             match f.try_lock() {
                 Ok(()) => return Lock(Some(f)),
-                Err(fs::TryLockError::WouldBlock) if t0.elapsed() < Duration::from_secs(5) => std::thread::sleep(Duration::from_millis(5)),
+                Err(fs::TryLockError::WouldBlock) if t0.elapsed() < Duration::from_secs(5) => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
                 Err(_) => return Lock(None),
             }
         }
@@ -243,7 +301,12 @@ impl Drop for Lock {
 }
 
 /// `check`: None = no compare, Some(None) = the file must not exist, Some(Some(stamp)) = it must still be exactly that file.
-pub fn write(dir: &Path, name: &str, text: &str, check: Option<Option<Stamp>>) -> Result<(), String> {
+pub fn write(
+    dir: &Path,
+    name: &str,
+    text: &str,
+    check: Option<Option<Stamp>>,
+) -> Result<(), String> {
     let p = resolve(dir, name)?;
     fs::create_dir_all(dir).map_err(|e| format!("cannot create the data folder: {e}"))?;
     let target = plan_target(&p, name)?; // refuses before any file (even the lock file) is created
@@ -259,10 +322,18 @@ pub fn write(dir: &Path, name: &str, text: &str, check: Option<Option<Stamp>>) -
             return Err(format!("{name} is read-only; nothing was saved"));
         }
     }
-    let nanos = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let tmp = target.temp_dir.join(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = target
+        .temp_dir
+        .join(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
     let result = (|| -> std::io::Result<()> {
-        let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         drop(f);
@@ -279,7 +350,11 @@ pub fn write(dir: &Path, name: &str, text: &str, check: Option<Option<Stamp>>) -
             let _ = fs::set_permissions(&tmp, perms);
         }
         still_same(&target).map_err(std::io::Error::other)?;
-        retry_transient(|| fs::rename(&tmp, &target.path), &RETRY_DELAYS_MS, std::thread::sleep)?;
+        retry_transient(
+            || fs::rename(&tmp, &target.path),
+            &RETRY_DELAYS_MS,
+            std::thread::sleep,
+        )?;
         #[cfg(unix)]
         {
             if let Some(d) = target.path.parent().and_then(|d| fs::File::open(d).ok()) {
@@ -305,14 +380,22 @@ pub fn move_aside(dir: &Path, name: &str, backup: &str) -> Result<String, String
     }
     let stem = backup.strip_suffix(".json").unwrap_or(backup);
     for n in 0..100u32 {
-        let nanos = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let unique = format!("{stem}-{:x}{n}.json", nanos & 0xffff_ffff);
-        let to = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).join(&unique);
+        let to = dir
+            .canonicalize()
+            .unwrap_or_else(|_| dir.to_path_buf())
+            .join(&unique);
         // symlink_metadata sees a dangling symlink too; a name that exists in any form is skipped
         if fs::symlink_metadata(&to).is_ok() {
             continue;
         }
-        return fs::rename(&from, &to).map(|_| unique).map_err(|e| format!("could not keep a backup of {name}: {e}"));
+        return fs::rename(&from, &to)
+            .map(|_| unique)
+            .map_err(|e| format!("could not keep a backup of {name}: {e}"));
     }
     Err("could not find an unused backup name".into())
 }
@@ -323,16 +406,40 @@ mod tests {
 
     #[test]
     fn names_are_checked() {
-        for ok in ["settings.json", "usage-alerts.json", "usage-history.json", "settings.broken-1760000000000-ab12cd.json", "usage-history.broken-1760000000000.json"] {
+        for ok in [
+            "settings.json",
+            "usage-alerts.json",
+            "usage-history.json",
+            "settings.broken-1760000000000-ab12cd.json",
+            "usage-history.broken-1760000000000.json",
+        ] {
             assert!(valid_name(ok), "{ok}");
         }
         for bad in [
-            "", "../settings.json", "settings.json/", "a/settings.json", "..", ".", "settings.json.bak", "other.json", "settings.broken-.json", "settings.json\n",
-            "C:\\x.json", "tasks\0.json", "settings.broken-UPPER.json", "settings.broken-../x.json", "/etc/passwd", "settings.json ", "TASKS.json",
+            "",
+            "../settings.json",
+            "settings.json/",
+            "a/settings.json",
+            "..",
+            ".",
+            "settings.json.bak",
+            "other.json",
+            "settings.broken-.json",
+            "settings.json\n",
+            "C:\\x.json",
+            "tasks\0.json",
+            "settings.broken-UPPER.json",
+            "settings.broken-../x.json",
+            "/etc/passwd",
+            "settings.json ",
+            "TASKS.json",
         ] {
             assert!(!valid_name(bad), "{bad:?}");
         }
-        assert!(!valid_name(&format!("settings.broken-{}.json", "a".repeat(41))));
+        assert!(!valid_name(&format!(
+            "settings.broken-{}.json",
+            "a".repeat(41)
+        )));
     }
 
     /// Every kind of link in place of a data file is refused for read, stat and write, and the file behind it stays byte for byte.
@@ -358,23 +465,43 @@ mod tests {
                 let link = data.join(name);
                 let _ = fs::remove_file(&link);
                 symlink(&victim, &link).unwrap();
-                for e in [read(&data, name).unwrap_err(), stat(&data, name).unwrap_err(), write(&data, name, "{\"layout\":\"x\"}", None).unwrap_err()] {
+                for e in [
+                    read(&data, name).unwrap_err(),
+                    stat(&data, name).unwrap_err(),
+                    write(&data, name, "{\"layout\":\"x\"}", None).unwrap_err(),
+                ] {
                     assert!(e.contains("is a link: not followed"), "{name} -> {n}: {e}");
                 }
-                assert_eq!(&fs::read(&victim).unwrap(), content, "{n} must be untouched");
-                assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-                assert!(!data.join(format!("{name}.lock")).exists(), "no stray lock file");
+                assert_eq!(
+                    &fs::read(&victim).unwrap(),
+                    content,
+                    "{n} must be untouched"
+                );
+                assert!(fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink());
+                assert!(
+                    !data.join(format!("{name}.lock")).exists(),
+                    "no stray lock file"
+                );
             }
         }
         // dangling and directory links are links too
         let link = data.join("settings.json");
         fs::remove_file(&link).unwrap();
         symlink(d.path().join("gone"), &link).unwrap();
-        assert!(read(&data, "settings.json").unwrap_err().contains("is a link: not followed"));
-        assert!(write(&data, "settings.json", "{}", None).unwrap_err().contains("is a link: not followed"));
+        assert!(read(&data, "settings.json")
+            .unwrap_err()
+            .contains("is a link: not followed"));
+        assert!(write(&data, "settings.json", "{}", None)
+            .unwrap_err()
+            .contains("is a link: not followed"));
         fs::remove_file(&link).unwrap();
         symlink(d.path(), &link).unwrap();
-        assert!(read(&data, "settings.json").unwrap_err().contains("is a link: not followed"));
+        assert!(read(&data, "settings.json")
+            .unwrap_err()
+            .contains("is a link: not followed"));
     }
 
     /// A fifo named like a data file must not block anything: refused at once, for read, stat and write, even with no writer.
@@ -387,10 +514,19 @@ mod tests {
         // SAFETY: valid NUL-terminated path
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let dir = d.path().to_path_buf();
-        let h = std::thread::spawn(move || (read(&dir, "settings.json"), stat(&dir, "settings.json"), write(&dir, "settings.json", "{}", None)));
+        let h = std::thread::spawn(move || {
+            (
+                read(&dir, "settings.json"),
+                stat(&dir, "settings.json"),
+                write(&dir, "settings.json", "{}", None),
+            )
+        });
         let t = std::time::Instant::now();
         while !h.is_finished() {
-            assert!(t.elapsed() < Duration::from_secs(3), "the read of a fifo blocked");
+            assert!(
+                t.elapsed() < Duration::from_secs(3),
+                "the read of a fifo blocked"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         let (r, s, w) = h.join().unwrap();
@@ -411,13 +547,21 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let outside = d.path().join("outside.json");
         let data = d.path().join("data");
-        for bad in ["../outside.json", "..\\outside.json", "settings.json/../../outside.json", "/tmp/x.json"] {
+        for bad in [
+            "../outside.json",
+            "..\\outside.json",
+            "settings.json/../../outside.json",
+            "/tmp/x.json",
+        ] {
             assert!(write(&data, bad, "x", None).is_err(), "{bad}");
             assert!(read(&data, bad).is_err(), "{bad}");
             assert!(stat(&data, bad).is_err(), "{bad}");
         }
         assert!(!outside.exists());
-        assert!(!data.exists(), "a refused write must not even create the folder");
+        assert!(
+            !data.exists(),
+            "a refused write must not even create the folder"
+        );
     }
 
     #[test]
@@ -427,15 +571,28 @@ mod tests {
         assert_eq!(read(&data, "settings.json").unwrap(), None);
         assert_eq!(stat(&data, "settings.json").unwrap(), None);
         write(&data, "settings.json", "{\"tasks\":[]}\n", None).unwrap();
-        assert_eq!(read(&data, "settings.json").unwrap().as_deref(), Some("{\"tasks\":[]}\n"));
+        assert_eq!(
+            read(&data, "settings.json").unwrap().as_deref(),
+            Some("{\"tasks\":[]}\n")
+        );
         let s = stat(&data, "settings.json").unwrap().unwrap();
         assert_eq!(s.size, 13);
         write(&data, "settings.json", "{\"tasks\":[1]}\n", None).unwrap();
         let s2 = stat(&data, "settings.json").unwrap().unwrap();
         assert_eq!(s2.size, 14);
-        let mut names: Vec<_> = fs::read_dir(&data).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        let mut names: Vec<_> = fs::read_dir(&data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
         names.sort();
-        assert_eq!(names, vec!["settings.json".to_string(), "settings.json.lock".to_string()], "no temp files left (the .lock file belongs to the compare-and-swap)");
+        assert_eq!(
+            names,
+            vec![
+                "settings.json".to_string(),
+                "settings.json.lock".to_string()
+            ],
+            "no temp files left (the .lock file belongs to the compare-and-swap)"
+        );
     }
 
     /// The reviewed attack: a planted link data/settings.json -> ~/.zshrc (or any other file) must never be overwritten.
@@ -449,10 +606,21 @@ mod tests {
         fs::write(&victim, "precious").unwrap();
         fs::hard_link(&victim, data.join("settings.json")).unwrap();
         write(&data, "settings.json", "{\"tasks\":[]}", None).unwrap();
-        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious", "the other name of the file is untouched");
-        assert_eq!(fs::read_to_string(data.join("settings.json")).unwrap(), "{\"tasks\":[]}");
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "precious",
+            "the other name of the file is untouched"
+        );
+        assert_eq!(
+            fs::read_to_string(data.join("settings.json")).unwrap(),
+            "{\"tasks\":[]}"
+        );
         use std::os::unix::fs::MetadataExt;
-        assert_eq!(fs::metadata(data.join("settings.json")).unwrap().nlink(), 1, "the data file is its own file now");
+        assert_eq!(
+            fs::metadata(data.join("settings.json")).unwrap().nlink(),
+            1,
+            "the data file is its own file now"
+        );
     }
 
     #[cfg(unix)]
@@ -465,7 +633,10 @@ mod tests {
         let data = d.path().join("data-link");
         symlink(&real_dir, &data).unwrap();
         write(&data, "settings.json", "{\"tasks\":[]}", None).unwrap();
-        assert_eq!(fs::read_to_string(real_dir.join("settings.json")).unwrap(), "{\"tasks\":[]}");
+        assert_eq!(
+            fs::read_to_string(real_dir.join("settings.json")).unwrap(),
+            "{\"tasks\":[]}"
+        );
         let victim = d.path().join("zshrc");
         fs::write(&victim, "keep").unwrap();
         fs::remove_file(real_dir.join("settings.json")).unwrap();
@@ -486,7 +657,13 @@ mod tests {
         symlink(&victim, d.path().join("settings.json")).unwrap();
         let n = move_aside(d.path(), "settings.json", "settings.broken-1.json").unwrap();
         assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
-        assert!(fs::symlink_metadata(d.path().join(&n)).unwrap().file_type().is_symlink(), "the link itself was renamed");
+        assert!(
+            fs::symlink_metadata(d.path().join(&n))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link itself was renamed"
+        );
         assert!(!d.path().join("settings.json").exists());
         // a planted link where the backup would go is skipped, not followed
         fs::write(d.path().join("settings.json"), "bad").unwrap();
@@ -507,11 +684,21 @@ mod tests {
         write(d.path(), "settings.json", "second", None).unwrap();
         let second = move_aside(d.path(), "settings.json", "settings.broken-1-abc.json").unwrap();
         assert_ne!(first, second);
-        assert_eq!(fs::read_to_string(d.path().join(&first)).unwrap(), "broken", "the first backup is untouched");
-        assert!(move_aside(d.path(), "settings.json", "settings.broken-1-abc.json").is_err(), "source is gone now");
+        assert_eq!(
+            fs::read_to_string(d.path().join(&first)).unwrap(),
+            "broken",
+            "the first backup is untouched"
+        );
+        assert!(
+            move_aside(d.path(), "settings.json", "settings.broken-1-abc.json").is_err(),
+            "source is gone now"
+        );
         write(d.path(), "settings.json", "third", None).unwrap();
         assert!(move_aside(d.path(), "settings.json", "settings.json").is_err());
-        assert_eq!(fs::read_to_string(d.path().join("settings.json")).unwrap(), "third");
+        assert_eq!(
+            fs::read_to_string(d.path().join("settings.json")).unwrap(),
+            "third"
+        );
     }
 
     #[cfg(unix)]
@@ -523,8 +710,16 @@ mod tests {
         std::os::unix::fs::symlink(&victim, d.path().join("settings.broken-1.json")).unwrap();
         let name = move_aside(d.path(), "settings.json", "settings.broken-1.json").unwrap();
         assert_ne!(name, "settings.broken-1.json");
-        assert!(!victim.exists(), "the symlink target was not created or written");
-        assert!(fs::symlink_metadata(d.path().join("settings.broken-1.json")).unwrap().file_type().is_symlink());
+        assert!(
+            !victim.exists(),
+            "the symlink target was not created or written"
+        );
+        assert!(
+            fs::symlink_metadata(d.path().join("settings.broken-1.json"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
@@ -551,17 +746,32 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("settings.json");
         fs::write(&p, b"\xEF\xBB\xBF{\"tasks\":[]}").unwrap();
-        assert_eq!(read(d.path(), "settings.json").unwrap().as_deref(), Some("{\"tasks\":[]}"));
+        assert_eq!(
+            read(d.path(), "settings.json").unwrap().as_deref(),
+            Some("{\"tasks\":[]}")
+        );
         assert_eq!(fs::read(&p).unwrap(), b"\xEF\xBB\xBF{\"tasks\":[]}");
     }
 
     #[test]
     fn utf16_gives_a_clear_error() {
         let d = tempfile::tempdir().unwrap();
-        let bytes: Vec<u8> = [0xFF, 0xFE].into_iter().chain("{\"tasks\":[]}".encode_utf16().flat_map(|u| u.to_le_bytes())).collect();
+        let bytes: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(
+                "{\"tasks\":[]}"
+                    .encode_utf16()
+                    .flat_map(|u| u.to_le_bytes()),
+            )
+            .collect();
         fs::write(d.path().join("settings.json"), bytes).unwrap();
         let e = read(d.path(), "settings.json").unwrap_err();
-        assert!(e.contains("not UTF-8 text") && e.contains("UTF-16") && e.contains("save it again as UTF-8"), "{e}");
+        assert!(
+            e.contains("not UTF-8 text")
+                && e.contains("UTF-16")
+                && e.contains("save it again as UTF-8"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -572,15 +782,25 @@ mod tests {
         let e = read(d.path(), "settings.json").unwrap_err();
         assert!(e.contains("larger than 32 MB"), "{e}");
         f.set_len(MAX_READ_BYTES).unwrap();
-        assert!(read(d.path(), "settings.json").is_ok(), "exactly at the cap is still read");
+        assert!(
+            read(d.path(), "settings.json").is_ok(),
+            "exactly at the cap is still read"
+        );
     }
 
     fn compare_and_swap_basics(d: &Path) -> Stamp {
         write(d, "settings.json", "one", Some(None)).unwrap(); // must not exist: ok
-        assert_eq!(write(d, "settings.json", "x", Some(None)).unwrap_err(), CONFLICT);
+        assert_eq!(
+            write(d, "settings.json", "x", Some(None)).unwrap_err(),
+            CONFLICT
+        );
         let seen = stat(d, "settings.json").unwrap().unwrap();
         write(d, "settings.json", "two", Some(Some(seen.clone()))).unwrap();
-        assert_eq!(write(d, "settings.json", "three", Some(Some(seen))).unwrap_err(), CONFLICT, "the stamp is stale now");
+        assert_eq!(
+            write(d, "settings.json", "three", Some(Some(seen))).unwrap_err(),
+            CONFLICT,
+            "the stamp is stale now"
+        );
         assert_eq!(read(d, "settings.json").unwrap().as_deref(), Some("two"));
         stat(d, "settings.json").unwrap().unwrap()
     }
@@ -592,11 +812,22 @@ mod tests {
         // what every OS guarantees: a different size or a different modification time is noticed
         let p = d.path().join("settings.json");
         fs::write(&p, "a longer text than before").unwrap();
-        assert_eq!(write(d.path(), "settings.json", "four", Some(Some(fresh.clone()))).unwrap_err(), CONFLICT);
+        assert_eq!(
+            write(d.path(), "settings.json", "four", Some(Some(fresh.clone()))).unwrap_err(),
+            CONFLICT
+        );
         let fresh2 = stat(d.path(), "settings.json").unwrap().unwrap();
         let mt = fs::metadata(&p).unwrap().modified().unwrap();
-        fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(mt + Duration::from_secs(5)).unwrap();
-        assert_eq!(write(d.path(), "settings.json", "five", Some(Some(fresh2))).unwrap_err(), CONFLICT);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mt + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            write(d.path(), "settings.json", "five", Some(Some(fresh2))).unwrap_err(),
+            CONFLICT
+        );
         write(d.path(), "settings.json", "six", None).unwrap();
     }
 
@@ -612,11 +843,19 @@ mod tests {
         let mt = fs::metadata(&p).unwrap().modified().unwrap();
         std::thread::sleep(Duration::from_millis(20));
         fs::write(&p, "TWO").unwrap();
-        fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(mt).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mt)
+            .unwrap();
         let after = stat(d.path(), "settings.json").unwrap().unwrap();
         assert_eq!((after.size, after.mtime_us), (fresh.size, fresh.mtime_us));
         assert_ne!(after, fresh, "ctime (or inode) tells the two apart");
-        assert_eq!(write(d.path(), "settings.json", "four", Some(Some(fresh))).unwrap_err(), CONFLICT);
+        assert_eq!(
+            write(d.path(), "settings.json", "four", Some(Some(fresh))).unwrap_err(),
+            CONFLICT
+        );
         write(d.path(), "settings.json", "five", None).unwrap();
     }
 
@@ -631,7 +870,10 @@ mod tests {
         let e = write(d.path(), "settings.json", "b", None).unwrap_err();
         assert!(e.contains("read-only"), "{e}");
         assert_eq!(fs::read_to_string(&p).unwrap(), "a");
-        assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o444);
+        assert_eq!(
+            fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
     }
 
     #[test]
@@ -642,7 +884,11 @@ mod tests {
         let r = retry_transient(
             || {
                 n += 1;
-                if n < 4 { Err(Error::from(ErrorKind::PermissionDenied)) } else { Ok(n) }
+                if n < 4 {
+                    Err(Error::from(ErrorKind::PermissionDenied))
+                } else {
+                    Ok(n)
+                }
             },
             &RETRY_DELAYS_MS,
             |d| slept.push(d.as_millis() as u64),
@@ -651,12 +897,20 @@ mod tests {
         assert_eq!(slept, vec![20, 50, 100]);
         // gives up after five retries
         let mut slept = Vec::new();
-        let r: std::io::Result<()> = retry_transient(|| Err(Error::from(ErrorKind::PermissionDenied)), &RETRY_DELAYS_MS, |d| slept.push(d.as_millis() as u64));
+        let r: std::io::Result<()> = retry_transient(
+            || Err(Error::from(ErrorKind::PermissionDenied)),
+            &RETRY_DELAYS_MS,
+            |d| slept.push(d.as_millis() as u64),
+        );
         assert!(r.is_err());
         assert_eq!(slept, vec![20, 50, 100, 200, 400]);
         // an error that is not transient is returned at once
         let mut slept = Vec::new();
-        let r: std::io::Result<()> = retry_transient(|| Err(Error::from(ErrorKind::NotFound)), &RETRY_DELAYS_MS, |d| slept.push(d.as_millis() as u64));
+        let r: std::io::Result<()> = retry_transient(
+            || Err(Error::from(ErrorKind::NotFound)),
+            &RETRY_DELAYS_MS,
+            |d| slept.push(d.as_millis() as u64),
+        );
         assert!(r.is_err() && slept.is_empty());
         #[cfg(windows)]
         {
@@ -684,7 +938,11 @@ mod tests {
             let stamp = Stamp {
                 size: r.next() % (1u64 << 40),
                 // realistic file times: 2001 .. 2100, any microsecond; also the odd far-past and far-future one
-                mtime_us: if i % 1000 == 0 { -((r.next() % (1 << 50)) as i64) } else { 1_000_000_000_000_000 + (r.next() % 3_000_000_000_000_000) as i64 },
+                mtime_us: if i % 1000 == 0 {
+                    -((r.next() % (1 << 50)) as i64)
+                } else {
+                    1_000_000_000_000_000 + (r.next() % 3_000_000_000_000_000) as i64
+                },
                 ctime_us: 1_000_000_000_000_000 + (r.next() % 3_000_000_000_000_000) as i64,
                 ino: (r.next() % (1u64 << 60)).to_string(),
             };
@@ -692,7 +950,10 @@ mod tests {
             let back: Stamp = serde_json::from_str(&json).unwrap();
             assert_eq!(back, stamp, "{json}");
             // the page parses it with JSON.parse (a double) and writes it back: integers below 2^53 are exact there
-            assert!(stamp.mtime_us.unsigned_abs() < (1u64 << 53) && stamp.ctime_us.unsigned_abs() < (1u64 << 53));
+            assert!(
+                stamp.mtime_us.unsigned_abs() < (1u64 << 53)
+                    && stamp.ctime_us.unsigned_abs() < (1u64 << 53)
+            );
             let via_f64 = stamp.mtime_us as f64 as i64;
             assert_eq!(via_f64, stamp.mtime_us);
         }
@@ -707,9 +968,18 @@ mod tests {
         for i in 0..2000 {
             let seen_json = serde_json::to_string(&seen).unwrap();
             let expected: Option<Stamp> = serde_json::from_str(&seen_json).unwrap();
-            write(d.path(), "settings.json", &format!("{{\"tasks\":[],\"n\":{i}}}"), Some(expected)).unwrap_or_else(|e| panic!("iteration {i}: {e}"));
+            write(
+                d.path(),
+                "settings.json",
+                &format!("{{\"tasks\":[],\"n\":{i}}}"),
+                Some(expected),
+            )
+            .unwrap_or_else(|e| panic!("iteration {i}: {e}"));
             seen = stat(d.path(), "settings.json").unwrap();
         }
-        assert_eq!(read(d.path(), "settings.json").unwrap().unwrap(), "{\"tasks\":[],\"n\":1999}");
+        assert_eq!(
+            read(d.path(), "settings.json").unwrap().unwrap(),
+            "{\"tasks\":[],\"n\":1999}"
+        );
     }
 }

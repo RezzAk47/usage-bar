@@ -25,11 +25,16 @@ use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Rect as TauriRect, State, WebviewWindow, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Rect as TauriRect, State,
+    WebviewWindow, WindowEvent,
+};
 
 use creds::Provider;
 use datadir::Os;
-use position::{fallback_corner, popup_height_logical, popup_position, popup_width_logical, usable_icon, Rect};
+use position::{
+    fallback_corner, popup_height_logical, popup_position, popup_width_logical, usable_icon, Rect,
+};
 
 const MARGIN: i32 = 8;
 
@@ -79,15 +84,21 @@ fn app_info(state: State<AppState>) -> AppInfo {
 }
 
 /// Runs a file operation on its own thread and gives up after `limit`, so nothing a file does can freeze the tray or the popup.
-fn off_main_for<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+fn off_main_for<T: Send + 'static>(
+    limit: Duration,
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(limit).unwrap_or_else(|_| Err("the file did not answer in time".into()))
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| Err("the file did not answer in time".into()))
 }
 
-fn off_main<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+fn off_main<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     off_main_for(Duration::from_secs(5), f)
 }
 
@@ -104,13 +115,30 @@ async fn fs_stat(state: State<'_, AppState>, name: String) -> Result<Option<file
 }
 
 #[tauri::command]
-async fn fs_write(state: State<'_, AppState>, name: String, text: String, check: bool, expected: Option<files::Stamp>) -> Result<(), String> {
+async fn fs_write(
+    state: State<'_, AppState>,
+    name: String,
+    text: String,
+    check: bool,
+    expected: Option<files::Stamp>,
+) -> Result<(), String> {
     let dir = state.data_dir.clone();
-    off_main(move || files::write(&dir, &name, &text, if check { Some(expected) } else { None }))
+    off_main(move || {
+        files::write(
+            &dir,
+            &name,
+            &text,
+            if check { Some(expected) } else { None },
+        )
+    })
 }
 
 #[tauri::command]
-async fn fs_move_aside(state: State<'_, AppState>, name: String, backup_name: String) -> Result<String, String> {
+async fn fs_move_aside(
+    state: State<'_, AppState>,
+    name: String,
+    backup_name: String,
+) -> Result<String, String> {
     let dir = state.data_dir.clone();
     off_main(move || files::move_aside(&dir, &name, &backup_name))
 }
@@ -118,7 +146,8 @@ async fn fs_move_aside(state: State<'_, AppState>, name: String, backup_name: St
 /// `label` is "<menu bar text>\n<tooltip>" (or just a tooltip). The text is shown next to the icon on macOS; the tooltip on every OS.
 #[tauri::command]
 fn set_tray_label(state: State<AppState>, label: String) {
-    let clean = |t: &str, n: usize| -> String { t.chars().filter(|c| !c.is_control()).take(n).collect() };
+    let clean =
+        |t: &str, n: usize| -> String { t.chars().filter(|c| !c.is_control()).take(n).collect() };
     let (text, tip) = match label.split_once('\n') {
         Some((a, b)) => (clean(a, 24), clean(b, 160)),
         None => (String::new(), clean(&label, 160)),
@@ -150,7 +179,10 @@ fn quit_app(app: AppHandle) {
 /// The one command that touches the network. `provider` is "claude" or "codex"; the answer is a status and the provider's
 /// response (a token is never part of it). Runs on a worker thread: the request can take up to 15 s.
 #[tauri::command]
-async fn fetch_usage(state: State<'_, AppState>, provider: String) -> Result<usage::FetchResult, String> {
+async fn fetch_usage(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<usage::FetchResult, String> {
     let data_dir = state.data_dir.clone();
     let p = Provider::parse(&provider).ok_or_else(|| "unknown provider".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -160,7 +192,10 @@ async fn fetch_usage(state: State<'_, AppState>, provider: String) -> Result<usa
         let res = usage::fetch(p, &cfg, &http);
         if cfg.test_mode {
             // what crossed the IPC boundary, for the verification run to search for secrets
-            eprintln!("usage-bar: ipc fetch_usage -> {}", serde_json::to_string(&res).unwrap_or_default());
+            eprintln!(
+                "usage-bar: ipc fetch_usage -> {}",
+                serde_json::to_string(&res).unwrap_or_default()
+            );
         }
         res
     })
@@ -172,22 +207,40 @@ async fn fetch_usage(state: State<'_, AppState>, provider: String) -> Result<usa
 #[tauri::command]
 fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
     use tauri_plugin_notification::{NotificationExt, PermissionState};
-    let (title, body) = (notification_text(&title, 120), notification_text(&body, 240));
+    let (title, body) = (
+        notification_text(&title, 120),
+        notification_text(&body, 240),
+    );
     if test_mode() {
         eprintln!("usage-bar: notify {title:?} {body:?}");
         return Ok(());
     }
     let n = app.notification();
-    if n.permission_state().map_err(|e| e.to_string())? != PermissionState::Granted && n.request_permission().map_err(|e| e.to_string())? != PermissionState::Granted {
+    if n.permission_state().map_err(|e| e.to_string())? != PermissionState::Granted
+        && n.request_permission().map_err(|e| e.to_string())? != PermissionState::Granted
+    {
         return Err("notifications are not allowed".into());
     }
-    n.builder().title(title).body(body).show().map_err(|e| e.to_string())
+    n.builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 /// Text for a notification: no control characters, and none of `<`, `>`, `&` (some Linux notification daemons render markup).
 pub fn notification_text(text: &str, max: usize) -> String {
-    let kept: String = text.chars().filter(|c| !matches!(c, '<' | '>' | '&')).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+    let kept: String = text
+        .chars()
+        .filter(|c| !matches!(c, '<' | '>' | '&'))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    kept.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
 }
 
 /// Opens the provider's usage page (a fixed address) in the browser. You press the button there yourself.
@@ -203,26 +256,47 @@ fn open_usage_page(app: AppHandle, provider: String) -> Result<(), String> {
         eprintln!("usage-bar: open-usage-page {provider}");
         return Ok(());
     }
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 fn to_rect(r: &TauriRect, scale: f64) -> Rect {
     let p = r.position.to_physical::<i32>(scale);
     let s = r.size.to_physical::<u32>(scale);
-    Rect { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 }
+    Rect {
+        x: p.x,
+        y: p.y,
+        w: s.width as i32,
+        h: s.height as i32,
+    }
 }
 
 /// Work area (screen minus menu bar and taskbar) of the monitor that holds the point, else the primary monitor.
 fn work_area(app: &AppHandle, around: Option<Rect>) -> Rect {
     let monitor = around
-        .and_then(|r| app.monitor_from_point((r.x + r.w / 2) as f64, (r.y + r.h / 2) as f64).ok().flatten())
+        .and_then(|r| {
+            app.monitor_from_point((r.x + r.w / 2) as f64, (r.y + r.h / 2) as f64)
+                .ok()
+                .flatten()
+        })
         .or_else(|| app.primary_monitor().ok().flatten());
     match monitor {
         Some(m) => {
             let a = m.work_area();
-            Rect { x: a.position.x, y: a.position.y, w: a.size.width as i32, h: a.size.height as i32 }
+            Rect {
+                x: a.position.x,
+                y: a.position.y,
+                w: a.size.width as i32,
+                h: a.size.height as i32,
+            }
         }
-        None => Rect { x: 0, y: 0, w: 1280, h: 720 },
+        None => Rect {
+            x: 0,
+            y: 0,
+            w: 1280,
+            h: 720,
+        },
     }
 }
 
@@ -232,11 +306,24 @@ fn size_and_place(app: &AppHandle, win: &WebviewWindow, icon: Option<Rect>) {
     let icon = usable_icon(icon);
     let work = work_area(app, icon);
     let scale = win.scale_factor().unwrap_or(1.0);
-    let (w, h) = (popup_width_logical(work.w, scale, MARGIN), popup_height_logical(work.h, scale, MARGIN));
+    let (w, h) = (
+        popup_width_logical(work.w, scale, MARGIN),
+        popup_height_logical(work.h, scale, MARGIN),
+    );
     let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
-    let size = win.outer_size().map(|s| (s.width as i32, s.height as i32)).unwrap_or(((w as f64 * scale) as i32, (h as f64 * scale) as i32));
+    let size = win
+        .outer_size()
+        .map(|s| (s.width as i32, s.height as i32))
+        .unwrap_or(((w as f64 * scale) as i32, (h as f64 * scale) as i32));
     let margin = (MARGIN as f64 * scale).round() as i32;
-    let (x, y) = popup_position(icon, work, size.0, size.1, margin, fallback_corner(Os::current() == Os::Windows));
+    let (x, y) = popup_position(
+        icon,
+        work,
+        size.0,
+        size.1,
+        margin,
+        fallback_corner(Os::current() == Os::Windows),
+    );
     let _ = win.set_position(PhysicalPosition::new(x, y));
 }
 
@@ -250,7 +337,9 @@ fn place_and_show(app: &AppHandle, win: &WebviewWindow, icon: Option<Rect>) {
 }
 
 fn toggle_popup(app: &AppHandle, icon: Option<Rect>) {
-    let Some(win) = app.get_webview_window("main") else { return };
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
     let state = app.state::<AppState>();
     if win.is_visible().unwrap_or(false) {
         let _ = win.hide();
@@ -291,9 +380,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
                 let app = tray.app_handle();
-                let scale = app.get_webview_window("main").and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
+                let scale = app
+                    .get_webview_window("main")
+                    .and_then(|w| w.scale_factor().ok())
+                    .unwrap_or(1.0);
                 let r = to_rect(&rect, scale);
                 *app.state::<AppState>().last_icon.lock().unwrap() = Some(r);
                 toggle_popup(app, Some(r));
@@ -330,20 +428,44 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .manage(AppState { data_dir, blurred_at: Mutex::new(None), last_icon: Mutex::new(None), tray: Mutex::new(None) })
-        .invoke_handler(tauri::generate_handler![app_info, fs_read, fs_stat, fs_write, fs_move_aside, set_tray_label, hide_popup, quit_app, fetch_usage, notify, open_usage_page])
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .manage(AppState {
+            data_dir,
+            blurred_at: Mutex::new(None),
+            last_icon: Mutex::new(None),
+            tray: Mutex::new(None),
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            fs_read,
+            fs_stat,
+            fs_write,
+            fs_move_aside,
+            set_tray_label,
+            hide_popup,
+            quit_app,
+            fetch_usage,
+            notify,
+            open_usage_page
+        ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon
             build_tray(app.handle())?;
-            eprintln!("usage-bar: tray icon created; data folder {}", app.state::<AppState>().data_dir.display());
+            eprintln!(
+                "usage-bar: tray icon created; data folder {}",
+                app.state::<AppState>().data_dir.display()
+            );
             if let Some(win) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 let w = win.clone();
                 win.on_window_event(move |event| {
                     if let WindowEvent::Focused(false) = event {
-                        *handle.state::<AppState>().blurred_at.lock().unwrap() = Some(Instant::now());
+                        *handle.state::<AppState>().blurred_at.lock().unwrap() =
+                            Some(Instant::now());
                         let _ = w.hide();
                     }
                 });
@@ -383,14 +505,34 @@ mod log_guard {
     /// The `log` crate is compiled with max_level_off, and no crate that installs or prints logs may enter the lock file.
     #[test]
     fn logging_is_compiled_out() {
-        assert_eq!(log::STATIC_MAX_LEVEL, log::LevelFilter::Off, "keep `max_level_off` on the log dependency in Cargo.toml");
+        assert_eq!(
+            log::STATIC_MAX_LEVEL,
+            log::LevelFilter::Off,
+            "keep `max_level_off` on the log dependency in Cargo.toml"
+        );
     }
 
     #[test]
     fn no_logger_crate_is_in_the_lock_file() {
         let lock = include_str!("../Cargo.lock");
-        let banned = ["tauri-plugin-log", "env_logger", "fern", "tracing-subscriber", "flexi_logger", "simplelog", "pretty_env_logger", "stderrlog"];
-        let found: Vec<&str> = banned.iter().copied().filter(|b| lock.lines().any(|l| l.trim_end() == format!("name = \"{b}\""))).collect();
+        let banned = [
+            "tauri-plugin-log",
+            "env_logger",
+            "fern",
+            "tracing-subscriber",
+            "flexi_logger",
+            "simplelog",
+            "pretty_env_logger",
+            "stderrlog",
+        ];
+        let found: Vec<&str> = banned
+            .iter()
+            .copied()
+            .filter(|b| {
+                lock.lines()
+                    .any(|l| l.trim_end() == format!("name = \"{b}\""))
+            })
+            .collect();
         assert!(found.is_empty(), "logger crate(s) {found:?} in Cargo.lock: a logger could print request headers including the Authorization token. Remove them or review the guard on purpose.");
     }
 }
@@ -407,20 +549,33 @@ mod shell_tests {
             Ok(1)
         });
         assert!(r.is_err(), "gave up instead of waiting");
-        assert!(started.elapsed() < Duration::from_secs(2), "the caller was released after the limit, not after the file");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the caller was released after the limit, not after the file"
+        );
     }
 
     #[test]
     fn a_quick_file_operation_returns_its_value() {
-        assert_eq!(off_main_for(Duration::from_secs(2), || Ok::<_, String>(7)), Ok(7));
-        assert_eq!(off_main_for::<u8>(Duration::from_secs(2), || Err("disk full".into())), Err("disk full".to_string()));
+        assert_eq!(
+            off_main_for(Duration::from_secs(2), || Ok::<_, String>(7)),
+            Ok(7)
+        );
+        assert_eq!(
+            off_main_for::<u8>(Duration::from_secs(2), || Err("disk full".into())),
+            Err("disk full".to_string())
+        );
     }
 
     /// WCAG relative luminance of an sRGB channel triple.
     fn luminance(r: u8, g: u8, b: u8) -> f64 {
         let lin = |c: u8| {
             let c = c as f64 / 255.0;
-            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
         };
         0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
@@ -436,14 +591,26 @@ mod shell_tests {
             worst_dark = worst_dark.min((l + 0.05) / (luminance(26, 26, 26) + 0.05));
         }
         assert!(n >= 100, "the glyph has opaque pixels (found {n})");
-        assert!(worst_white >= 3.0, "contrast on a white panel is {worst_white:.2}");
-        assert!(worst_dark >= 3.0, "contrast on a near-black panel is {worst_dark:.2}");
+        assert!(
+            worst_white >= 3.0,
+            "contrast on a white panel is {worst_white:.2}"
+        );
+        assert!(
+            worst_dark >= 3.0,
+            "contrast on a near-black panel is {worst_dark:.2}"
+        );
     }
 
     #[test]
     fn notification_text_has_no_markup_or_control_characters() {
-        assert_eq!(notification_text("<b>Fix</b> & <a href=x>click</a>\n\u{7}done", 100), "bFix/b a href=xclick/a done");
-        assert_eq!(notification_text(&"x".repeat(500), 120).chars().count(), 120);
+        assert_eq!(
+            notification_text("<b>Fix</b> & <a href=x>click</a>\n\u{7}done", 100),
+            "bFix/b a href=xclick/a done"
+        );
+        assert_eq!(
+            notification_text(&"x".repeat(500), 120).chars().count(),
+            120
+        );
         assert_eq!(notification_text("  a   b  ", 10), "a b");
     }
 }

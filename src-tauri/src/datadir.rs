@@ -40,7 +40,11 @@ fn is_absolute(p: &str, os: Os) -> bool {
     match os {
         Os::Windows => {
             let b = p.as_bytes();
-            (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || p.starts_with("\\\\")
+            (b.len() >= 3
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && (b[2] == b'\\' || b[2] == b'/'))
+                || p.starts_with("\\\\")
         }
         _ => p.starts_with('/'),
     }
@@ -60,7 +64,9 @@ pub fn default_data_dir(os: Os, env: &dyn Fn(&str) -> Option<String>, home: &str
     let s = match os {
         Os::Mac => format!("{h}/Library/Application Support/UsageBar"),
         Os::Windows => {
-            let appdata = env("APPDATA").filter(|a| !a.trim().is_empty()).unwrap_or_else(|| format!("{h}\\AppData\\Roaming"));
+            let appdata = env("APPDATA")
+                .filter(|a| !a.trim().is_empty())
+                .unwrap_or_else(|| format!("{h}\\AppData\\Roaming"));
             format!("{}\\UsageBar", trim_end(&appdata, '\\'))
         }
         Os::Linux => {
@@ -80,37 +86,78 @@ mod tests {
     use std::collections::HashMap;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         move |k| m.get(k).cloned()
     }
 
     #[test]
     fn mac() {
-        assert_eq!(default_data_dir(Os::Mac, &env(&[]), "/Users/ann"), PathBuf::from("/Users/ann/Library/Application Support/UsageBar"));
+        assert_eq!(
+            default_data_dir(Os::Mac, &env(&[]), "/Users/ann"),
+            PathBuf::from("/Users/ann/Library/Application Support/UsageBar")
+        );
     }
 
     #[test]
     fn windows_uses_appdata_then_profile() {
         let e = env(&[("APPDATA", "C:\\Users\\Ann\\AppData\\Roaming")]);
-        assert_eq!(default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"), PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"));
+        assert_eq!(
+            default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"),
+            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+        );
         let e = env(&[("APPDATA", "C:\\Users\\Ann\\AppData\\Roaming\\")]);
-        assert_eq!(default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"), PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"));
-        assert_eq!(default_data_dir(Os::Windows, &env(&[]), "C:\\Users\\Ann"), PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"));
+        assert_eq!(
+            default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"),
+            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+        );
+        assert_eq!(
+            default_data_dir(Os::Windows, &env(&[]), "C:\\Users\\Ann"),
+            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+        );
     }
 
     #[test]
     fn linux_uses_xdg_when_absolute() {
-        assert_eq!(default_data_dir(Os::Linux, &env(&[]), "/home/ann"), PathBuf::from("/home/ann/.local/share/UsageBar"));
-        assert_eq!(default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "/data/xdg")]), "/home/ann"), PathBuf::from("/data/xdg/UsageBar"));
-        assert_eq!(default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "relative/dir")]), "/home/ann"), PathBuf::from("/home/ann/.local/share/UsageBar"));
-        assert_eq!(default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "")]), "/home/ann/"), PathBuf::from("/home/ann/.local/share/UsageBar"));
+        assert_eq!(
+            default_data_dir(Os::Linux, &env(&[]), "/home/ann"),
+            PathBuf::from("/home/ann/.local/share/UsageBar")
+        );
+        assert_eq!(
+            default_data_dir(
+                Os::Linux,
+                &env(&[("XDG_DATA_HOME", "/data/xdg")]),
+                "/home/ann"
+            ),
+            PathBuf::from("/data/xdg/UsageBar")
+        );
+        assert_eq!(
+            default_data_dir(
+                Os::Linux,
+                &env(&[("XDG_DATA_HOME", "relative/dir")]),
+                "/home/ann"
+            ),
+            PathBuf::from("/home/ann/.local/share/UsageBar")
+        );
+        assert_eq!(
+            default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "")]), "/home/ann/"),
+            PathBuf::from("/home/ann/.local/share/UsageBar")
+        );
     }
 
     #[test]
     fn override_wins_everywhere() {
         for os in [Os::Mac, Os::Windows, Os::Linux] {
-            assert_eq!(default_data_dir(os, &env(&[("USAGEBAR_DATA_DIR", "/tmp/x")]), "/h"), PathBuf::from("/tmp/x"));
+            assert_eq!(
+                default_data_dir(os, &env(&[("USAGEBAR_DATA_DIR", "/tmp/x")]), "/h"),
+                PathBuf::from("/tmp/x")
+            );
         }
-        assert_eq!(default_data_dir(Os::Linux, &env(&[("USAGEBAR_DATA_DIR", "  ")]), "/h"), PathBuf::from("/h/.local/share/UsageBar"));
+        assert_eq!(
+            default_data_dir(Os::Linux, &env(&[("USAGEBAR_DATA_DIR", "  ")]), "/h"),
+            PathBuf::from("/h/.local/share/UsageBar")
+        );
     }
 }

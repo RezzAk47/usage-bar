@@ -42,9 +42,15 @@ impl SleepDetector {
         let d_awake = s.awake_ms.saturating_sub(prev.awake_ms);
         let drift = d_real.saturating_sub(d_awake);
         if drift > DRIFT_MS {
-            Some(Slept { at: prev.wall_ms, slept_ms: drift })
+            Some(Slept {
+                at: prev.wall_ms,
+                slept_ms: drift,
+            })
         } else if d_real > STALL_MS {
-            Some(Slept { at: prev.wall_ms, slept_ms: d_real })
+            Some(Slept {
+                at: prev.wall_ms,
+                slept_ms: d_real,
+            })
         } else {
             None
         }
@@ -53,7 +59,10 @@ impl SleepDetector {
 
 #[cfg(unix)]
 fn clock_ms(id: libc::clockid_t) -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: `ts` is a valid, writable timespec and `id` is a clock id defined by libc for this platform.
     let ok = unsafe { libc::clock_gettime(id, &mut ts) } == 0;
     if ok {
@@ -78,9 +87,15 @@ impl SystemClocks {
     }
 
     pub fn sample(&self) -> Sample {
-        let wall_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let wall_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         #[cfg(target_os = "macos")]
-        let (awake_ms, real_ms) = (clock_ms(libc::CLOCK_UPTIME_RAW), clock_ms(libc::CLOCK_MONOTONIC));
+        let (awake_ms, real_ms) = (
+            clock_ms(libc::CLOCK_UPTIME_RAW),
+            clock_ms(libc::CLOCK_MONOTONIC),
+        );
         #[cfg(all(unix, not(target_os = "macos")))]
         let (awake_ms, real_ms) = (clock_ms(libc::CLOCK_MONOTONIC), {
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -97,7 +112,11 @@ impl SystemClocks {
             let e = self.start.elapsed().as_millis() as u64;
             (e, e)
         };
-        Sample { awake_ms, real_ms, wall_ms }
+        Sample {
+            awake_ms,
+            real_ms,
+            wall_ms,
+        }
     }
 }
 
@@ -112,7 +131,11 @@ mod tests {
     use super::*;
 
     fn s(awake: u64, real: u64, wall: i64) -> Sample {
-        Sample { awake_ms: awake, real_ms: real, wall_ms: wall }
+        Sample {
+            awake_ms: awake,
+            real_ms: real,
+            wall_ms: wall,
+        }
     }
 
     #[test]
@@ -120,7 +143,10 @@ mod tests {
         let mut d = SleepDetector::default();
         assert_eq!(d.observe(s(0, 0, 1_000_000)), None);
         for i in 1..50u64 {
-            assert_eq!(d.observe(s(i * 2000, i * 2000, 1_000_000 + (i * 2000) as i64)), None);
+            assert_eq!(
+                d.observe(s(i * 2000, i * 2000, 1_000_000 + (i * 2000) as i64)),
+                None
+            );
         }
     }
 
@@ -129,10 +155,19 @@ mod tests {
         let mut d = SleepDetector::default();
         d.observe(s(10_000, 10_000, 5_000_000));
         // slept for one hour: awake advanced 2 s, real advanced 3602 s, wall advanced 3602 s
-        let e = d.observe(s(12_000, 3_612_000, 5_000_000 + 3_602_000)).unwrap();
-        assert_eq!(e.at, 5_000_000, "the session ends at the last tick before the sleep");
+        let e = d
+            .observe(s(12_000, 3_612_000, 5_000_000 + 3_602_000))
+            .unwrap();
+        assert_eq!(
+            e.at, 5_000_000,
+            "the session ends at the last tick before the sleep"
+        );
         assert_eq!(e.slept_ms, 3_600_000);
-        assert_eq!(d.observe(s(14_000, 3_614_000, 5_000_000 + 3_604_000)), None, "quiet again afterwards");
+        assert_eq!(
+            d.observe(s(14_000, 3_614_000, 5_000_000 + 3_604_000)),
+            None,
+            "quiet again afterwards"
+        );
     }
 
     #[test]
@@ -163,8 +198,16 @@ mod tests {
     fn small_jitter_and_brief_stalls_are_ignored() {
         let mut d = SleepDetector::default();
         d.observe(s(0, 0, 0));
-        assert_eq!(d.observe(s(9_000, 9_500, 9_500)), None, "a 0.5 s difference");
-        assert_eq!(d.observe(s(9_000 + 25_000, 9_500 + 25_000, 34_500)), None, "a 25 s stall is under the limit");
+        assert_eq!(
+            d.observe(s(9_000, 9_500, 9_500)),
+            None,
+            "a 0.5 s difference"
+        );
+        assert_eq!(
+            d.observe(s(9_000 + 25_000, 9_500 + 25_000, 34_500)),
+            None,
+            "a 25 s stall is under the limit"
+        );
     }
 
     #[test]
@@ -173,7 +216,11 @@ mod tests {
         let a = c.sample();
         std::thread::sleep(std::time::Duration::from_millis(30));
         let b = c.sample();
-        assert!(b.awake_ms >= a.awake_ms && b.real_ms >= a.real_ms && b.real_ms > a.real_ms.saturating_sub(1));
+        assert!(
+            b.awake_ms >= a.awake_ms
+                && b.real_ms >= a.real_ms
+                && b.real_ms > a.real_ms.saturating_sub(1)
+        );
         let mut d = SleepDetector::default();
         d.observe(a);
         assert_eq!(d.observe(b), None);

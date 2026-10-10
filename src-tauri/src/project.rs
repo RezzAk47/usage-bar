@@ -11,7 +11,10 @@ pub const MAX_WINDOWS: usize = 32;
 pub const MAX_NAME: usize = 40;
 
 fn name_ok(s: &str) -> bool {
-    !s.is_empty() && s.chars().count() <= MAX_NAME && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '-'))
+    !s.is_empty()
+        && s.chars().count() <= MAX_NAME
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '-'))
 }
 
 fn leaky(s: &str, token: Option<&Secret>) -> bool {
@@ -25,14 +28,26 @@ fn num(v: &Value) -> Option<Value> {
         Value::String(s) if s.len() <= 40 => s.trim().parse::<f64>().ok()?,
         _ => return None,
     };
-    f.is_finite().then(|| Number::from_f64(f).map(Value::Number)).flatten()
+    f.is_finite()
+        .then(|| Number::from_f64(f).map(Value::Number))
+        .flatten()
 }
 
 /// A reset time: a number, or a short string made only of what an ISO time or a number can contain.
 fn reset(v: &Value, token: Option<&Secret>) -> Option<Value> {
     match v {
         Value::Number(_) => num(v),
-        Value::String(s) if s.len() <= 40 && !s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | '.' | '+' | 'T' | 't' | 'Z' | 'z' | ' ' | ',')) && !leaky(s, token) => Some(Value::String(s.clone())),
+        Value::String(s)
+            if s.len() <= 40
+                && !s.is_empty()
+                && s.chars().all(|c| {
+                    c.is_ascii_digit()
+                        || matches!(c, '-' | ':' | '.' | '+' | 'T' | 't' | 'Z' | 'z' | ' ' | ',')
+                })
+                && !leaky(s, token) =>
+        {
+            Some(Value::String(s.clone()))
+        }
         _ => None,
     }
 }
@@ -53,7 +68,9 @@ fn put(o: &mut Map<String, Value>, k: &str, v: Option<Value>) {
 /// `{five_hour: {utilization, resets_at}, ..., extra_usage: {is_enabled, utilization}}`.
 pub fn claude(raw: &Value, token: Option<&Secret>) -> Value {
     let mut out = Map::new();
-    let Some(obj) = raw.as_object() else { return Value::Object(out) };
+    let Some(obj) = raw.as_object() else {
+        return Value::Object(out);
+    };
     for (k, w) in obj.iter() {
         if out.len() >= MAX_WINDOWS {
             break;
@@ -70,7 +87,11 @@ pub fn claude(raw: &Value, token: Option<&Secret>) -> Value {
             put(&mut o, "utilization", w.get("utilization").and_then(num));
         } else {
             put(&mut o, "utilization", w.get("utilization").and_then(num));
-            put(&mut o, "resets_at", w.get("resets_at").and_then(|v| reset(v, token)));
+            put(
+                &mut o,
+                "resets_at",
+                w.get("resets_at").and_then(|v| reset(v, token)),
+            );
         }
         if o.contains_key("utilization") {
             out.insert(k.clone(), Value::Object(o));
@@ -79,22 +100,46 @@ pub fn claude(raw: &Value, token: Option<&Secret>) -> Value {
     Value::Object(out)
 }
 
-fn window(w: &Value, used: &[&str], secs: &[&str], resets: &[&str], token: Option<&Secret>) -> Option<Value> {
+fn window(
+    w: &Value,
+    used: &[&str],
+    secs: &[&str],
+    resets: &[&str],
+    token: Option<&Secret>,
+) -> Option<Value> {
     let w = w.as_object()?;
     let mut o = Map::new();
-    for k in used.iter().chain(secs).chain(["reset_after_seconds"].iter()) {
+    for k in used
+        .iter()
+        .chain(secs)
+        .chain(["reset_after_seconds"].iter())
+    {
         put(&mut o, k, w.get(*k).and_then(num));
     }
     for k in resets {
         put(&mut o, k, w.get(*k).and_then(|v| reset(v, token)));
     }
-    used.iter().any(|k| o.contains_key(*k)).then_some(Value::Object(o))
+    used.iter()
+        .any(|k| o.contains_key(*k))
+        .then_some(Value::Object(o))
 }
 
 fn rate_limit(r: &Value, token: Option<&Secret>) -> Value {
     let mut o = Map::new();
     for k in ["primary_window", "secondary_window"] {
-        put(&mut o, k, r.get(k).and_then(|w| window(w, &["used_percent"], &["limit_window_seconds"], &["reset_at"], token)));
+        put(
+            &mut o,
+            k,
+            r.get(k).and_then(|w| {
+                window(
+                    w,
+                    &["used_percent"],
+                    &["limit_window_seconds"],
+                    &["reset_at"],
+                    token,
+                )
+            }),
+        );
     }
     Value::Object(o)
 }
@@ -102,7 +147,11 @@ fn rate_limit(r: &Value, token: Option<&Secret>) -> Value {
 /// Codex: the web shape `{plan_type, rate_limit, additional_rate_limits}` and the app-server shape `{rateLimits: {...}}`.
 pub fn codex(raw: &Value, token: Option<&Secret>) -> Value {
     let mut out = Map::new();
-    put(&mut out, "plan_type", raw.get("plan_type").and_then(|v| label(v, token)));
+    put(
+        &mut out,
+        "plan_type",
+        raw.get("plan_type").and_then(|v| label(v, token)),
+    );
     if let Some(r) = raw.get("rate_limit").filter(|r| r.is_object()) {
         out.insert("rate_limit".into(), rate_limit(r, token));
     }
@@ -112,7 +161,13 @@ pub fn codex(raw: &Value, token: Option<&Secret>) -> Value {
             .take(20)
             .filter_map(|e| {
                 let mut o = Map::new();
-                put(&mut o, "limit_name", e.get("limit_name").or_else(|| e.get("metered_feature")).and_then(|v| label(v, token)));
+                put(
+                    &mut o,
+                    "limit_name",
+                    e.get("limit_name")
+                        .or_else(|| e.get("metered_feature"))
+                        .and_then(|v| label(v, token)),
+                );
                 o.insert("rate_limit".into(), rate_limit(e.get("rate_limit")?, token));
                 Some(Value::Object(o))
             })
@@ -121,9 +176,25 @@ pub fn codex(raw: &Value, token: Option<&Secret>) -> Value {
     }
     if let Some(r) = raw.get("rateLimits").filter(|r| r.is_object()) {
         let mut o = Map::new();
-        put(&mut o, "planType", r.get("planType").and_then(|v| label(v, token)));
+        put(
+            &mut o,
+            "planType",
+            r.get("planType").and_then(|v| label(v, token)),
+        );
         for k in ["primary", "secondary"] {
-            put(&mut o, k, r.get(k).and_then(|w| window(w, &["usedPercent"], &["windowDurationMins"], &["resetsAt"], token)));
+            put(
+                &mut o,
+                k,
+                r.get(k).and_then(|w| {
+                    window(
+                        w,
+                        &["usedPercent"],
+                        &["windowDurationMins"],
+                        &["resetsAt"],
+                        token,
+                    )
+                }),
+            );
         }
         out.insert("rateLimits".into(), Value::Object(o));
     }
@@ -155,7 +226,10 @@ mod tests {
             "extra_usage": {"is_enabled": true, "utilization": 2.4, "currency": "USD"},
         });
         let out = claude(&raw, Some(&t));
-        assert_eq!(out, json!({"five_hour": {"utilization": 37.5, "resets_at": "2026-10-07T17:19:00.123+00:00"}, "seven_day": {"utilization": 40.0, "resets_at": 1900000000.0}, "extra_usage": {"is_enabled": true, "utilization": 2.4}}));
+        assert_eq!(
+            out,
+            json!({"five_hour": {"utilization": 37.5, "resets_at": "2026-10-07T17:19:00.123+00:00"}, "seven_day": {"utilization": 40.0, "resets_at": 1900000000.0}, "extra_usage": {"is_enabled": true, "utilization": 2.4}})
+        );
     }
 
     #[test]
@@ -181,9 +255,19 @@ mod tests {
     #[test]
     fn a_short_alphanumeric_token_used_as_plan_or_name_is_dropped() {
         let t = Secret::new("abcd1234".into());
-        assert_eq!(codex(&json!({"plan_type": "abcd1234"}), Some(&t)), json!({}));
-        assert_eq!(claude(&json!({"abcd1234": {"utilization": 1}}), Some(&t)), json!({}), "a window named like the token is dropped");
-        assert!(clean(json!({"k": "abcd1234"}), Some(&t)).is_none(), "the final check refuses a leftover exact match");
+        assert_eq!(
+            codex(&json!({"plan_type": "abcd1234"}), Some(&t)),
+            json!({})
+        );
+        assert_eq!(
+            claude(&json!({"abcd1234": {"utilization": 1}}), Some(&t)),
+            json!({}),
+            "a window named like the token is dropped"
+        );
+        assert!(
+            clean(json!({"k": "abcd1234"}), Some(&t)).is_none(),
+            "the final check refuses a leftover exact match"
+        );
         assert!(clean(json!({"five_hour": {"utilization": 1.0}}), Some(&t)).is_some());
     }
 
@@ -196,9 +280,18 @@ mod tests {
             "rateLimits": {"planType": "plus", "primary": {"usedPercent": 7, "resetsAt": "1900000000", "windowDurationMins": 300}},
         });
         let out = codex(&raw, None);
-        assert_eq!(out["rate_limit"], json!({"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000.0, "reset_at": 1900000000.0}}));
-        assert_eq!(out["additional_rate_limits"], json!([{"limit_name": "spark", "rate_limit": {"primary_window": {"used_percent": 0.0}}}]));
-        assert_eq!(out["rateLimits"]["primary"], json!({"usedPercent": 7.0, "windowDurationMins": 300.0, "resetsAt": "1900000000"}));
+        assert_eq!(
+            out["rate_limit"],
+            json!({"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000.0, "reset_at": 1900000000.0}})
+        );
+        assert_eq!(
+            out["additional_rate_limits"],
+            json!([{"limit_name": "spark", "rate_limit": {"primary_window": {"used_percent": 0.0}}}])
+        );
+        assert_eq!(
+            out["rateLimits"]["primary"],
+            json!({"usedPercent": 7.0, "windowDurationMins": 300.0, "resetsAt": "1900000000"})
+        );
         assert!(out.get("plan_type").is_none() && out.get("secret").is_none());
         assert_eq!(out["rateLimits"]["planType"], "plus");
     }
@@ -213,7 +306,10 @@ mod tests {
         for i in 0..100 {
             m.insert(format!("w{i}"), json!({"utilization": 1}));
         }
-        assert_eq!(claude(&Value::Object(m), None).as_object().unwrap().len(), MAX_WINDOWS);
+        assert_eq!(
+            claude(&Value::Object(m), None).as_object().unwrap().len(),
+            MAX_WINDOWS
+        );
         let long = "a".repeat(41);
         assert_eq!(claude(&json!({long: {"utilization": 1}}), None), json!({}));
     }

@@ -39,11 +39,25 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 /// "2026-10-07T17:19:00.123Z" / "+02:00" to epoch milliseconds. None for anything else.
 fn parse_iso_ms(s: &str) -> Option<i64> {
     let b = s.as_bytes();
-    if s.len() < 19 || s.len() > 40 || b[4] != b'-' || b[7] != b'-' || !(b[10] == b'T' || b[10] == b't' || b[10] == b' ') || b[13] != b':' || b[16] != b':' {
+    if s.len() < 19
+        || s.len() > 40
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !(b[10] == b'T' || b[10] == b't' || b[10] == b' ')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
         return None;
     }
     let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, mo, d, h, mi, sec) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
+    let (y, mo, d, h, mi, sec) = (
+        n(0..4)?,
+        n(5..7)?,
+        n(8..10)?,
+        n(11..13)?,
+        n(14..16)?,
+        n(17..19)?,
+    );
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 60 {
         return None;
     }
@@ -62,7 +76,10 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
         o if (o.starts_with('+') || o.starts_with('-')) && o.len() >= 3 => {
             let sign = if o.starts_with('-') { -1 } else { 1 };
             let d = o[1..].replace(':', "");
-            let (oh, om) = (d.get(0..2)?.parse::<i64>().ok()?, d.get(2..4).map_or(Some(0), |x| x.parse::<i64>().ok())?);
+            let (oh, om) = (
+                d.get(0..2)?.parse::<i64>().ok()?,
+                d.get(2..4).map_or(Some(0), |x| x.parse::<i64>().ok())?,
+            );
             if oh > 23 || om > 59 {
                 return None;
             }
@@ -91,7 +108,10 @@ pub fn parse_expiry(v: &serde_json::Value) -> Option<i64> {
         serde_json::Value::Number(n) => from_number(n.as_f64()?),
         serde_json::Value::String(s) => {
             let t = s.trim();
-            t.parse::<f64>().ok().and_then(from_number).or_else(|| parse_iso_ms(t))
+            t.parse::<f64>()
+                .ok()
+                .and_then(from_number)
+                .or_else(|| parse_iso_ms(t))
         }
         _ => None,
     }
@@ -190,18 +210,25 @@ pub fn read_cred_file(path: &Path) -> Result<String, CredError> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(libc::O_NOFOLLOW);
     }
-    let file = opts.open(path).map_err(|_| CredError::Refused("cannot be opened"))?;
+    let file = opts
+        .open(path)
+        .map_err(|_| CredError::Refused("cannot be opened"))?;
     // the file we opened must be the file we checked (a swap between the check and the open is refused)
     match file.metadata() {
         Ok(m) if m.is_file() && same_file(&m, &meta) => {}
         _ => return Err(CredError::Refused("changed while being opened")),
     }
     let mut bytes = Vec::new();
-    file.take(MAX_CRED_BYTES + 1).read_to_end(&mut bytes).map_err(|_| CredError::Refused("cannot be read"))?;
+    file.take(MAX_CRED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CredError::Refused("cannot be read"))?;
     if bytes.len() as u64 > MAX_CRED_BYTES {
         return Err(CredError::Refused("is too large"));
     }
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&bytes).to_vec();
+    let bytes = bytes
+        .strip_prefix(&[0xEF, 0xBB, 0xBF][..])
+        .unwrap_or(&bytes)
+        .to_vec();
     String::from_utf8(bytes).map_err(|_| CredError::Malformed)
 }
 
@@ -221,34 +248,65 @@ pub struct CodexCreds {
 
 fn plain_label(s: &str) -> Option<String> {
     let t = s.trim();
-    (!t.is_empty() && t.len() <= 30 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-')).then(|| t.to_string())
+    (!t.is_empty()
+        && t.len() <= 30
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-'))
+    .then(|| t.to_string())
 }
 
 /// `{"claudeAiOauth": {"accessToken": "...", "expiresAt": <ms>, "subscriptionType": "max"}}` (the format Claude Code writes).
 pub fn parse_claude(text: &str) -> Result<ClaudeCreds, CredError> {
     let v: serde_json::Value = serde_json::from_str(text).map_err(|_| CredError::Malformed)?;
-    let o = v.get("claudeAiOauth").and_then(|x| x.as_object()).ok_or(CredError::Malformed)?;
-    let token = o.get("accessToken").and_then(|x| x.as_str()).ok_or(CredError::Malformed)?;
+    let o = v
+        .get("claudeAiOauth")
+        .and_then(|x| x.as_object())
+        .ok_or(CredError::Malformed)?;
+    let token = o
+        .get("accessToken")
+        .and_then(|x| x.as_str())
+        .ok_or(CredError::Malformed)?;
     if !valid_token(token) {
         return Err(CredError::InvalidToken);
     }
     Ok(ClaudeCreds {
         token: Secret::new(token.to_string()),
         expires_ms: o.get("expiresAt").and_then(parse_expiry),
-        plan: o.get("subscriptionType").and_then(|x| x.as_str()).and_then(plain_label),
+        plan: o
+            .get("subscriptionType")
+            .and_then(|x| x.as_str())
+            .and_then(plain_label),
     })
 }
 
 /// `{"tokens": {"access_token": "...", "account_id": "..."}}` (the format Codex writes with ChatGPT sign-in).
 pub fn parse_codex(text: &str) -> Result<CodexCreds, CredError> {
     let v: serde_json::Value = serde_json::from_str(text).map_err(|_| CredError::Malformed)?;
-    let t = v.get("tokens").and_then(|x| x.as_object()).ok_or(CredError::Malformed)?;
-    let token = t.get("access_token").and_then(|x| x.as_str()).ok_or(CredError::Malformed)?;
+    let t = v
+        .get("tokens")
+        .and_then(|x| x.as_object())
+        .ok_or(CredError::Malformed)?;
+    let token = t
+        .get("access_token")
+        .and_then(|x| x.as_str())
+        .ok_or(CredError::Malformed)?;
     if !valid_token(token) {
         return Err(CredError::InvalidToken);
     }
-    let account_id = t.get("account_id").and_then(|x| x.as_str()).filter(|a| !a.is_empty() && a.len() <= 128 && a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).map(str::to_string);
-    Ok(CodexCreds { token: Secret::new(token.to_string()), account_id })
+    let account_id = t
+        .get("account_id")
+        .and_then(|x| x.as_str())
+        .filter(|a| {
+            !a.is_empty()
+                && a.len() <= 128
+                && a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+        .map(str::to_string);
+    Ok(CodexCreds {
+        token: Secret::new(token.to_string()),
+        account_id,
+    })
 }
 
 /// The home folder: the ONE place this is decided (the data folder, the config folders and the codex search all use it).
@@ -271,30 +329,85 @@ mod tests {
     use super::*;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let m: std::collections::HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let m: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         move |k| m.get(k).cloned()
     }
 
     #[test]
     fn config_dir_order() {
-        assert_eq!(config_dir(Provider::Claude, &env(&[]), "/h"), PathBuf::from("/h/.claude"));
-        assert_eq!(config_dir(Provider::Codex, &env(&[]), "/h"), PathBuf::from("/h/.codex"));
-        assert_eq!(config_dir(Provider::Claude, &env(&[("CLAUDE_CONFIG_DIR", "/c")]), "/h"), PathBuf::from("/c"));
-        assert_eq!(config_dir(Provider::Claude, &env(&[("CLAUDE_CONFIG_DIR", "/c"), ("USAGEBAR_CLAUDE_DIR", "/t")]), "/h"), PathBuf::from("/t"));
-        assert_eq!(config_dir(Provider::Codex, &env(&[("CODEX_HOME", "/x"), ("USAGEBAR_CODEX_DIR", "  ")]), "/h"), PathBuf::from("/x"));
+        assert_eq!(
+            config_dir(Provider::Claude, &env(&[]), "/h"),
+            PathBuf::from("/h/.claude")
+        );
+        assert_eq!(
+            config_dir(Provider::Codex, &env(&[]), "/h"),
+            PathBuf::from("/h/.codex")
+        );
+        assert_eq!(
+            config_dir(Provider::Claude, &env(&[("CLAUDE_CONFIG_DIR", "/c")]), "/h"),
+            PathBuf::from("/c")
+        );
+        assert_eq!(
+            config_dir(
+                Provider::Claude,
+                &env(&[("CLAUDE_CONFIG_DIR", "/c"), ("USAGEBAR_CLAUDE_DIR", "/t")]),
+                "/h"
+            ),
+            PathBuf::from("/t")
+        );
+        assert_eq!(
+            config_dir(
+                Provider::Codex,
+                &env(&[("CODEX_HOME", "/x"), ("USAGEBAR_CODEX_DIR", "  ")]),
+                "/h"
+            ),
+            PathBuf::from("/x")
+        );
     }
 
     #[test]
     fn home_precedence_per_platform() {
-        let e = |pairs: Vec<(&'static str, &'static str)>| move |k: &str| pairs.iter().find(|(a, _)| *a == k).map(|(_, v)| v.to_string());
-        let all = vec![("USERPROFILE", "C:\\Users\\a"), ("HOMEDRIVE", "D:"), ("HOMEPATH", "\\h"), ("HOME", "/msys/home/a")];
+        let e = |pairs: Vec<(&'static str, &'static str)>| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(a, _)| *a == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        let all = vec![
+            ("USERPROFILE", "C:\\Users\\a"),
+            ("HOMEDRIVE", "D:"),
+            ("HOMEPATH", "\\h"),
+            ("HOME", "/msys/home/a"),
+        ];
         assert_eq!(home_for(Os::Windows, &e(all.clone())), "C:\\Users\\a");
-        assert_eq!(home_for(Os::Windows, &e(vec![("HOMEDRIVE", "D:"), ("HOMEPATH", "\\h"), ("HOME", "/m")])), "D:\\h");
+        assert_eq!(
+            home_for(
+                Os::Windows,
+                &e(vec![
+                    ("HOMEDRIVE", "D:"),
+                    ("HOMEPATH", "\\h"),
+                    ("HOME", "/m")
+                ])
+            ),
+            "D:\\h"
+        );
         assert_eq!(home_for(Os::Windows, &e(vec![("HOME", "/m")])), "/m");
-        assert_eq!(home_for(Os::Windows, &e(vec![("USERPROFILE", "  "), ("HOME", "/m")])), "/m");
+        assert_eq!(
+            home_for(Os::Windows, &e(vec![("USERPROFILE", "  "), ("HOME", "/m")])),
+            "/m"
+        );
         assert_eq!(home_for(Os::Windows, &e(vec![])), ".");
         for os in [Os::Linux, Os::Mac] {
-            assert_eq!(home_for(os, &e(all.clone())), "/msys/home/a", "Unix ignores USERPROFILE");
+            assert_eq!(
+                home_for(os, &e(all.clone())),
+                "/msys/home/a",
+                "Unix ignores USERPROFILE"
+            );
             assert_eq!(home_for(os, &e(vec![("USERPROFILE", "C:\\x")])), ".");
         }
     }
@@ -302,14 +415,33 @@ mod tests {
     #[test]
     fn parses_the_two_formats() {
         let c = parse_claude(r#"{"claudeAiOauth":{"accessToken":"t0k-12345","expiresAt":1900000000000,"subscriptionType":"max"}}"#).unwrap();
-        assert_eq!((c.token.expose(), c.expires_ms, c.plan.as_deref()), ("t0k-12345", Some(1900000000000), Some("max")));
+        assert_eq!(
+            (c.token.expose(), c.expires_ms, c.plan.as_deref()),
+            ("t0k-12345", Some(1900000000000), Some("max"))
+        );
         assert!(parse_claude(r#"{"claudeAiOauth":{}}"#).is_err());
         assert!(parse_claude("not json").is_err());
-        assert_eq!(parse_claude(r#"{"claudeAiOauth":{"accessToken":"t0k-12345","subscriptionType":"<script>"}}"#).unwrap().plan, None);
-        let d = parse_codex(r#"{"tokens":{"access_token":"abc-12345","account_id":"acct-1"}}"#).unwrap();
-        assert_eq!((d.token.expose(), d.account_id.as_deref()), ("abc-12345", Some("acct-1")));
+        assert_eq!(
+            parse_claude(
+                r#"{"claudeAiOauth":{"accessToken":"t0k-12345","subscriptionType":"<script>"}}"#
+            )
+            .unwrap()
+            .plan,
+            None
+        );
+        let d = parse_codex(r#"{"tokens":{"access_token":"abc-12345","account_id":"acct-1"}}"#)
+            .unwrap();
+        assert_eq!(
+            (d.token.expose(), d.account_id.as_deref()),
+            ("abc-12345", Some("acct-1"))
+        );
         assert!(parse_codex(r#"{"OPENAI_API_KEY":"x"}"#).is_err());
-        assert_eq!(parse_codex(r#"{"tokens":{"access_token":"a-1234567","account_id":"bad id!"}}"#).unwrap().account_id, None);
+        assert_eq!(
+            parse_codex(r#"{"tokens":{"access_token":"a-1234567","account_id":"bad id!"}}"#)
+                .unwrap()
+                .account_id,
+            None
+        );
     }
 
     fn claude_with(token: &str) -> String {
@@ -318,30 +450,91 @@ mod tests {
 
     #[test]
     fn token_validation_rejects_anything_that_is_not_visible_ascii_of_sane_length() {
-        for bad in ["abc\r\nX-Evil: 1", "abc\nX-Evil: 1", "abcdefgh ijk", "ab\0cdefgh", "abc\tdefgh", "tok\u{e9}n12345", "\u{0430}bcdefghij", " abcdefgh", "abcdefgh ", "short", "", &"a".repeat(4097)] {
-            assert_eq!(parse_claude(&claude_with(bad)).unwrap_err(), CredError::InvalidToken, "{bad:?}");
-            assert!(parse_codex(&serde_json::json!({"tokens": {"access_token": bad}}).to_string()).is_err());
+        for bad in [
+            "abc\r\nX-Evil: 1",
+            "abc\nX-Evil: 1",
+            "abcdefgh ijk",
+            "ab\0cdefgh",
+            "abc\tdefgh",
+            "tok\u{e9}n12345",
+            "\u{0430}bcdefghij",
+            " abcdefgh",
+            "abcdefgh ",
+            "short",
+            "",
+            &"a".repeat(4097),
+        ] {
+            assert_eq!(
+                parse_claude(&claude_with(bad)).unwrap_err(),
+                CredError::InvalidToken,
+                "{bad:?}"
+            );
+            assert!(
+                parse_codex(&serde_json::json!({"tokens": {"access_token": bad}}).to_string())
+                    .is_err()
+            );
         }
-        for good in ["abcdefgh", &"a".repeat(4096), "sk-ant-oat01-AbC_d.e/f+g=", "!~#$%&'*"] {
+        for good in [
+            "abcdefgh",
+            &"a".repeat(4096),
+            "sk-ant-oat01-AbC_d.e/f+g=",
+            "!~#$%&'*",
+        ] {
             assert!(parse_claude(&claude_with(good)).is_ok(), "{good:?}");
         }
-        assert_eq!(parse_claude(r#"{"claudeAiOauth":{"accessToken":5}}"#).unwrap_err(), CredError::Malformed);
+        assert_eq!(
+            parse_claude(r#"{"claudeAiOauth":{"accessToken":5}}"#).unwrap_err(),
+            CredError::Malformed
+        );
     }
 
     #[test]
     fn expiry_seconds_milliseconds_strings_iso_and_junk() {
         use serde_json::json;
         assert_eq!(parse_expiry(&json!(1900000000)), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!(1900000000000i64)), Some(1_900_000_000_000));
+        assert_eq!(
+            parse_expiry(&json!(1900000000000i64)),
+            Some(1_900_000_000_000)
+        );
         assert_eq!(parse_expiry(&json!(1900000000.5)), Some(1_900_000_000_500));
         assert_eq!(parse_expiry(&json!("1900000000")), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!("1900000000000")), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!("2030-03-17T17:46:40Z")), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!("2030-03-17T17:46:40.250Z")), Some(1_900_000_000_250));
-        assert_eq!(parse_expiry(&json!("2030-03-17T19:46:40+02:00")), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!("2030-03-17T10:46:40-07:00")), Some(1_900_000_000_000));
-        assert_eq!(parse_expiry(&json!("2030-03-17T17:46:40.123456789Z")), Some(1_900_000_000_123));
-        for junk in [json!(null), json!(true), json!("soon"), json!(0), json!(-5), json!(1e20), json!(1e15), json!([1]), json!({}), json!("2030-13-01T00:00:00Z"), json!("")] {
+        assert_eq!(
+            parse_expiry(&json!("1900000000000")),
+            Some(1_900_000_000_000)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2030-03-17T17:46:40Z")),
+            Some(1_900_000_000_000)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2030-03-17T17:46:40.250Z")),
+            Some(1_900_000_000_250)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2030-03-17T19:46:40+02:00")),
+            Some(1_900_000_000_000)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2030-03-17T10:46:40-07:00")),
+            Some(1_900_000_000_000)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2030-03-17T17:46:40.123456789Z")),
+            Some(1_900_000_000_123)
+        );
+        for junk in [
+            json!(null),
+            json!(true),
+            json!("soon"),
+            json!(0),
+            json!(-5),
+            json!(1e20),
+            json!(1e15),
+            json!([1]),
+            json!({}),
+            json!("2030-13-01T00:00:00Z"),
+            json!(""),
+        ] {
             assert_eq!(parse_expiry(&junk), None, "{junk}");
         }
     }
@@ -359,11 +552,20 @@ mod tests {
     #[test]
     fn missing_big_dir_and_bad_utf8() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(read_cred_file(&d.path().join("nope.json")), Err(CredError::Missing));
-        assert_eq!(read_cred_file(d.path()), Err(CredError::Refused("is not a regular file")));
+        assert_eq!(
+            read_cred_file(&d.path().join("nope.json")),
+            Err(CredError::Missing)
+        );
+        assert_eq!(
+            read_cred_file(d.path()),
+            Err(CredError::Refused("is not a regular file"))
+        );
         let big = d.path().join("big.json");
         fs::write(&big, vec![b' '; (MAX_CRED_BYTES + 1) as usize]).unwrap();
-        assert_eq!(read_cred_file(&big), Err(CredError::Refused("is too large")));
+        assert_eq!(
+            read_cred_file(&big),
+            Err(CredError::Refused("is too large"))
+        );
         let ok = d.path().join("edge.json");
         fs::write(&ok, vec![b' '; MAX_CRED_BYTES as usize]).unwrap();
         assert!(read_cred_file(&ok).is_ok());
@@ -386,7 +588,10 @@ mod tests {
         assert_eq!(read_cred_file(&link), Err(CredError::Refused("is a link")));
         let dangling = d.path().join("dangling.json");
         std::os::unix::fs::symlink(d.path().join("gone"), &dangling).unwrap();
-        assert_eq!(read_cred_file(&dangling), Err(CredError::Refused("is a link")));
+        assert_eq!(
+            read_cred_file(&dangling),
+            Err(CredError::Refused("is a link"))
+        );
     }
 
     #[cfg(unix)]
@@ -397,10 +602,16 @@ mod tests {
         let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
         // SAFETY: valid NUL-terminated path
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        assert_eq!(read_cred_file(&fifo), Err(CredError::Refused("is not a regular file")));
+        assert_eq!(
+            read_cred_file(&fifo),
+            Err(CredError::Refused("is not a regular file"))
+        );
         // /etc/hosts is a regular file owned by root: refused unless we are root
         if unsafe { libc::geteuid() } != 0 {
-            assert_eq!(read_cred_file(Path::new("/etc/hosts")), Err(CredError::Refused("belongs to another user")));
+            assert_eq!(
+                read_cred_file(Path::new("/etc/hosts")),
+                Err(CredError::Refused("belongs to another user"))
+            );
         }
     }
 }

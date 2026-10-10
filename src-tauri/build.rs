@@ -13,5 +13,6 @@ fn main() {
         "notify",
         "open_usage_page",
     ]);
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app)).expect("tauri build failed");
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))
+        .expect("tauri build failed");
 }

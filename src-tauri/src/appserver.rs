@@ -9,7 +9,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-
 use serde_json::{json, Value};
 
 pub const DEADLINE: Duration = Duration::from_secs(10);
@@ -37,7 +36,6 @@ impl AppServerError {
     }
 }
 
-
 /// Splits a growing byte buffer into complete lines (without the newline). The rest stays in `buf`.
 pub fn take_lines(buf: &mut Vec<u8>) -> Result<Vec<Vec<u8>>, AppServerError> {
     let mut out = Vec::new();
@@ -54,33 +52,72 @@ pub fn take_lines(buf: &mut Vec<u8>) -> Result<Vec<Vec<u8>>, AppServerError> {
 /// The only environment the child gets: PATH, the home folder, CODEX_HOME when set, and on Windows SystemRoot / TEMP / TMP.
 /// Everything else the app inherited (tokens in the environment, proxies, API keys) stays out of the child.
 pub fn child_env(env: &dyn Fn(&str) -> Option<String>, windows: bool) -> Vec<(String, String)> {
-    let names: &[&str] = if windows { &["PATH", "USERPROFILE", "CODEX_HOME", "SystemRoot", "TEMP", "TMP"] } else { &["PATH", "HOME", "CODEX_HOME"] };
-    names.iter().filter_map(|n| env(n).filter(|v| !v.is_empty() && !v.contains('\0')).map(|v| (n.to_string(), v))).collect()
+    let names: &[&str] = if windows {
+        &[
+            "PATH",
+            "USERPROFILE",
+            "CODEX_HOME",
+            "SystemRoot",
+            "TEMP",
+            "TMP",
+        ]
+    } else {
+        &["PATH", "HOME", "CODEX_HOME"]
+    };
+    names
+        .iter()
+        .filter_map(|n| {
+            env(n)
+                .filter(|v| !v.is_empty() && !v.contains('\0'))
+                .map(|v| (n.to_string(), v))
+        })
+        .collect()
 }
 
 /// Characters that mean something to cmd.exe: a `.cmd` path containing one is refused rather than quoted.
 fn cmd_unsafe(p: &str) -> bool {
-    p.chars().any(|c| matches!(c, '%' | '^' | '&' | '|' | '<' | '>' | '"' | '(' | ')' | '!' | '\n' | '\r' | '\0'))
+    p.chars().any(|c| {
+        matches!(
+            c,
+            '%' | '^' | '&' | '|' | '<' | '>' | '"' | '(' | ')' | '!' | '\n' | '\r' | '\0'
+        )
+    })
 }
 
 /// `bin app-server`. A Windows `.cmd` / `.bat` shim (how npm installs codex there) cannot be started directly: it goes through
 /// `cmd.exe /d /c <validated path> app-server` with a fixed argument list; no user data is ever part of the command line.
-pub fn build_command(bin: &Path, env: &[(String, String)], windows: bool) -> Result<Command, AppServerError> {
-    let ext = bin.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+pub fn build_command(
+    bin: &Path,
+    env: &[(String, String)],
+    windows: bool,
+) -> Result<Command, AppServerError> {
+    let ext = bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
     let mut cmd;
     if windows && (ext == "cmd" || ext == "bat") {
         let p = bin.to_str().ok_or(AppServerError::Spawn)?;
         if cmd_unsafe(p) {
             return Err(AppServerError::Spawn);
         }
-        let root = env.iter().find(|(k, _)| k == "SystemRoot").map(|(_, v)| v.clone()).unwrap_or_else(|| "C:\\Windows".into());
+        let root = env
+            .iter()
+            .find(|(k, _)| k == "SystemRoot")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| "C:\\Windows".into());
         cmd = Command::new(format!("{root}\\System32\\cmd.exe"));
         cmd.args(["/d", "/c", p, "app-server"]);
     } else {
         cmd = Command::new(bin);
         cmd.arg("app-server");
     }
-    cmd.env_clear().envs(env.iter().map(|(k, v)| (k, v))).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -126,7 +163,11 @@ fn kill_tree(child: &mut std::process::Child) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill.exe").args(["/T", "/F", "/PID", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = Command::new("taskkill.exe")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -135,11 +176,18 @@ fn kill_tree(child: &mut std::process::Child) {
 fn send(stdin: &mut impl Write, v: &Value) -> bool {
     let mut s = v.to_string();
     s.push('\n');
-    stdin.write_all(s.as_bytes()).and_then(|_| stdin.flush()).is_ok()
+    stdin
+        .write_all(s.as_bytes())
+        .and_then(|_| stdin.flush())
+        .is_ok()
 }
 
 /// Runs `bin app-server`, does the handshake and reads `account/rateLimits/read`. Returns the `result` object of that reply.
-pub fn rate_limits(bin: &Path, deadline: Duration, env: &[(String, String)]) -> Result<Value, AppServerError> {
+pub fn rate_limits(
+    bin: &Path,
+    deadline: Duration,
+    env: &[(String, String)],
+) -> Result<Value, AppServerError> {
     let mut cmd = build_command(bin, env, cfg!(windows))?;
     let mut child = cmd.spawn().map_err(|_| AppServerError::Spawn)?;
     let mut reader: Option<std::thread::JoinHandle<()>> = None;
@@ -160,7 +208,10 @@ pub fn rate_limits(bin: &Path, deadline: Duration, env: &[(String, String)]) -> 
                 }
             }
         }));
-        let _ = send(&mut stdin, &json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"usage-bar-cross","title":"Usage Bar","version":"0.1.0"}}}));
+        let _ = send(
+            &mut stdin,
+            &json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"usage-bar-cross","title":"Usage Bar","version":"0.1.0"}}}),
+        );
         let end = Instant::now() + deadline;
         let (mut buf, mut total, mut sent_second) = (Vec::new(), 0usize, false);
         loop {
@@ -180,12 +231,17 @@ pub fn rate_limits(bin: &Path, deadline: Duration, env: &[(String, String)]) -> 
             buf.extend_from_slice(&chunk);
             // every complete line in the buffer is handled now, however many arrived in this chunk
             for line in take_lines(&mut buf)? {
-                let Ok(v) = serde_json::from_slice::<Value>(&line) else { continue };
+                let Ok(v) = serde_json::from_slice::<Value>(&line) else {
+                    continue;
+                };
                 match v.get("id").and_then(Value::as_i64) {
                     Some(1) if !sent_second => {
                         sent_second = true;
                         let _ = send(&mut stdin, &json!({"method":"initialized","params":{}}));
-                        let _ = send(&mut stdin, &json!({"id":2,"method":"account/rateLimits/read"}));
+                        let _ = send(
+                            &mut stdin,
+                            &json!({"id":2,"method":"account/rateLimits/read"}),
+                        );
                     }
                     Some(2) => {
                         return match v.get("result") {
@@ -246,11 +302,19 @@ mod tests {
     fn both_replies_in_one_write_do_not_wait_for_the_deadline() {
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
-        let bin = script(d.path(), "codex", r#"printf '%s\n%s\n' '{"id":1,"result":{}}' '{"id":2,"result":{"rateLimits":{"planType":"plus","primary":{"usedPercent":12,"resetsAt":1900000000}}}}'
-sleep 30"#);
+        let bin = script(
+            d.path(),
+            "codex",
+            r#"printf '%s\n%s\n' '{"id":1,"result":{}}' '{"id":2,"result":{"rateLimits":{"planType":"plus","primary":{"usedPercent":12,"resetsAt":1900000000}}}}'
+sleep 30"#,
+        );
         let t = Instant::now();
         let v = rate_limits(&bin, Duration::from_secs(20)).unwrap();
-        assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            t.elapsed()
+        );
         assert_eq!(v["rateLimits"]["primary"]["usedPercent"], 12);
     }
 
@@ -259,12 +323,16 @@ sleep 30"#);
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         // answers each request when it arrives (real app-server behaviour), then idles
-        let bin = script(d.path(), "codex", r#"read a
+        let bin = script(
+            d.path(),
+            "codex",
+            r#"read a
 printf '%s\n' '{"id":1,"result":{}}'
 read b
 read c
 printf '%s\n' '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":7}}}}'
-sleep 30"#);
+sleep 30"#,
+        );
         let v = rate_limits(&bin, Duration::from_secs(10)).unwrap();
         assert_eq!(v["rateLimits"]["primary"]["usedPercent"], 7);
     }
@@ -273,13 +341,21 @@ sleep 30"#);
     fn a_reply_split_across_chunks_is_reassembled() {
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
-        let bin = script(d.path(), "codex", r#"printf '{"id":1,"res'
+        let bin = script(
+            d.path(),
+            "codex",
+            r#"printf '{"id":1,"res'
 sleep 0.2
 printf 'ult":{}}\n{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":3}}'
 sleep 0.2
 printf '}}\n'
-sleep 30"#);
-        assert_eq!(rate_limits(&bin, Duration::from_secs(10)).unwrap()["rateLimits"]["primary"]["usedPercent"], 3);
+sleep 30"#,
+        );
+        assert_eq!(
+            rate_limits(&bin, Duration::from_secs(10)).unwrap()["rateLimits"]["primary"]
+                ["usedPercent"],
+            3
+        );
     }
 
     #[test]
@@ -287,13 +363,52 @@ sleep 30"#);
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         let t = Instant::now();
-        assert_eq!(rate_limits(&script(d.path(), "g", "echo 'not json'"), Duration::from_secs(5)), Err(AppServerError::Closed));
-        assert_eq!(rate_limits(&script(d.path(), "e", "exit 3"), Duration::from_secs(5)), Err(AppServerError::Closed));
-        assert_eq!(rate_limits(&script(d.path(), "s", "sleep 30"), Duration::from_millis(600)), Err(AppServerError::Timeout));
-        assert_eq!(rate_limits(&script(d.path(), "r", r#"printf '%s\n' '{"id":1,"result":{}}' '{"id":2,"error":{"code":-1}}'; sleep 30"#), Duration::from_secs(5)), Err(AppServerError::Rpc));
+        assert_eq!(
+            rate_limits(
+                &script(d.path(), "g", "echo 'not json'"),
+                Duration::from_secs(5)
+            ),
+            Err(AppServerError::Closed)
+        );
+        assert_eq!(
+            rate_limits(&script(d.path(), "e", "exit 3"), Duration::from_secs(5)),
+            Err(AppServerError::Closed)
+        );
+        assert_eq!(
+            rate_limits(
+                &script(d.path(), "s", "sleep 30"),
+                Duration::from_millis(600)
+            ),
+            Err(AppServerError::Timeout)
+        );
+        assert_eq!(
+            rate_limits(
+                &script(
+                    d.path(),
+                    "r",
+                    r#"printf '%s\n' '{"id":1,"result":{}}' '{"id":2,"error":{"code":-1}}'; sleep 30"#
+                ),
+                Duration::from_secs(5)
+            ),
+            Err(AppServerError::Rpc)
+        );
         // 600 KB of noise without a newline, then silence: refused for size, the child is killed
-        assert_eq!(rate_limits(&script(d.path(), "f", "head -c 600000 /dev/zero | tr '\\0' 'x'; sleep 30"), Duration::from_secs(5)), Err(AppServerError::TooMuchOutput));
-        assert!(t.elapsed() < Duration::from_secs(8), "took {:?}", t.elapsed());
+        assert_eq!(
+            rate_limits(
+                &script(
+                    d.path(),
+                    "f",
+                    "head -c 600000 /dev/zero | tr '\\0' 'x'; sleep 30"
+                ),
+                Duration::from_secs(5)
+            ),
+            Err(AppServerError::TooMuchOutput)
+        );
+        assert!(
+            t.elapsed() < Duration::from_secs(8),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
@@ -301,19 +416,32 @@ sleep 30"#);
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         let marker = d.path().join("alive");
-        let bin = script(d.path(), "codex", &format!(r#"printf '%s\n%s\n' '{{"id":1,"result":{{}}}}' '{{"id":2,"result":{{"x":1}}}}'
-while true; do touch '{}'; sleep 0.1; done"#, marker.display()));
+        let bin = script(
+            d.path(),
+            "codex",
+            &format!(
+                r#"printf '%s\n%s\n' '{{"id":1,"result":{{}}}}' '{{"id":2,"result":{{"x":1}}}}'
+while true; do touch '{}'; sleep 0.1; done"#,
+                marker.display()
+            ),
+        );
         rate_limits(&bin, Duration::from_secs(5)).unwrap();
         std::thread::sleep(Duration::from_millis(400));
         let _ = std::fs::remove_file(&marker);
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!marker.exists(), "the fake codex was still running after we were done");
+        assert!(
+            !marker.exists(),
+            "the fake codex was still running after we were done"
+        );
     }
 
     #[test]
     fn missing_binary() {
         let _g = testlock::take();
-        assert_eq!(rate_limits(Path::new("/nonexistent/codex"), Duration::from_secs(1)), Err(AppServerError::Spawn));
+        assert_eq!(
+            rate_limits(Path::new("/nonexistent/codex"), Duration::from_secs(1)),
+            Err(AppServerError::Spawn)
+        );
         let d = tempfile::tempdir().unwrap();
         let bin = script(d.path(), "codex", "true");
         let _ = bin;
@@ -323,7 +451,10 @@ while true; do touch '{}'; sleep 0.1; done"#, marker.display()));
     fn line_splitting() {
         let _g = testlock::take();
         let mut b = b"a\nb\nc".to_vec();
-        assert_eq!(take_lines(&mut b).unwrap(), vec![b"a".to_vec(), b"b".to_vec()]);
+        assert_eq!(
+            take_lines(&mut b).unwrap(),
+            vec![b"a".to_vec(), b"b".to_vec()]
+        );
         assert_eq!(b, b"c");
         let mut big = vec![b'x'; MAX_LINE + 1];
         assert_eq!(take_lines(&mut big), Err(AppServerError::TooMuchOutput));
@@ -331,15 +462,22 @@ while true; do touch '{}'; sleep 0.1; done"#, marker.display()));
 
     /// Open PIPES of this process (fstat on every descriptor). Sockets, files and directories other tests open are not counted.
     fn count_fds() -> usize {
-        (0..4096).filter(|fd| {
-            let mut st: libc::stat = unsafe { std::mem::zeroed() };
-            // SAFETY: fstat on a possibly invalid descriptor just fails with EBADF
-            unsafe { libc::fstat(*fd, &mut st) == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFIFO }
-        }).count()
+        (0..4096)
+            .filter(|fd| {
+                let mut st: libc::stat = unsafe { std::mem::zeroed() };
+                // SAFETY: fstat on a possibly invalid descriptor just fails with EBADF
+                unsafe {
+                    libc::fstat(*fd, &mut st) == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFIFO
+                }
+            })
+            .count()
     }
 
     fn pgrep(pattern: &str) -> usize {
-        let out = std::process::Command::new("pgrep").args(["-f", pattern]).output().unwrap();
+        let out = std::process::Command::new("pgrep")
+            .args(["-f", pattern])
+            .output()
+            .unwrap();
         String::from_utf8_lossy(&out.stdout).lines().count()
     }
 
@@ -348,9 +486,13 @@ while true; do touch '{}'; sleep 0.1; done"#, marker.display()));
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         // the fake codex starts a background child of its own, like a real one might (node helpers, shells)
-        let bin = script(d.path(), "codex", r#"sleep 4321 &
+        let bin = script(
+            d.path(),
+            "codex",
+            r#"sleep 4321 &
 printf '%s\n%s\n' '{"id":1,"result":{}}' '{"id":2,"result":{"x":1}}'
-sleep 4320"#);
+sleep 4320"#,
+        );
         let before = count_fds();
         for _ in 0..100 {
             rate_limits(&bin, Duration::from_secs(5)).unwrap();
@@ -363,7 +505,10 @@ sleep 4320"#);
             orphans = pgrep("sleep 432");
             after = count_fds();
         }
-        assert_eq!(orphans, 0, "orphaned children survived (the background and the foreground sleep)");
+        assert_eq!(
+            orphans, 0,
+            "orphaned children survived (the background and the foreground sleep)"
+        );
         assert!(after <= before + 4, "open files before {before}, after {after} (100 fetches would leak ~300 if the pipes stayed open)");
     }
 
@@ -389,7 +534,10 @@ sleep 4320"#);
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         let bin = script(d.path(), "codex", "sleep 4322 &\nsleep 30");
-        assert_eq!(rate_limits(&bin, Duration::from_millis(400)), Err(AppServerError::Timeout));
+        assert_eq!(
+            rate_limits(&bin, Duration::from_millis(400)),
+            Err(AppServerError::Timeout)
+        );
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(pgrep("sleep 4322"), 0);
     }
@@ -399,34 +547,86 @@ sleep 4320"#);
         let _g = testlock::take();
         let d = tempfile::tempdir().unwrap();
         let out = d.path().join("env.txt");
-        let bin = script(d.path(), "codex", &format!(r#"env > '{}'
-printf '%s\n%s\n' '{{"id":1,"result":{{}}}}' '{{"id":2,"result":{{"x":1}}}}'"#, out.display()));
-        let env = child_env(&|k| match k {
-            "PATH" => Some("/usr/bin:/bin".into()),
-            "HOME" => Some("/h".into()),
-            "CODEX_HOME" => Some("/ch".into()),
-            "OPENAI_API_KEY" => Some("sk-fake-should-not-pass".into()),
-            "HTTPS_PROXY" => Some("http://p".into()),
-            _ => None,
-        }, false);
+        let bin = script(
+            d.path(),
+            "codex",
+            &format!(
+                r#"env > '{}'
+printf '%s\n%s\n' '{{"id":1,"result":{{}}}}' '{{"id":2,"result":{{"x":1}}}}'"#,
+                out.display()
+            ),
+        );
+        let env = child_env(
+            &|k| match k {
+                "PATH" => Some("/usr/bin:/bin".into()),
+                "HOME" => Some("/h".into()),
+                "CODEX_HOME" => Some("/ch".into()),
+                "OPENAI_API_KEY" => Some("sk-fake-should-not-pass".into()),
+                "HTTPS_PROXY" => Some("http://p".into()),
+                _ => None,
+            },
+            false,
+        );
         super::rate_limits(&bin, Duration::from_secs(5), &env).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         let text = std::fs::read_to_string(&out).unwrap();
-        assert!(text.contains("HOME=/h") && text.contains("CODEX_HOME=/ch") && text.contains("PATH=/usr/bin:/bin"));
-        assert!(!text.contains("OPENAI") && !text.contains("PROXY") && !text.contains("sk-fake"), "{text}");
+        assert!(
+            text.contains("HOME=/h")
+                && text.contains("CODEX_HOME=/ch")
+                && text.contains("PATH=/usr/bin:/bin")
+        );
+        assert!(
+            !text.contains("OPENAI") && !text.contains("PROXY") && !text.contains("sk-fake"),
+            "{text}"
+        );
         let w = child_env(&|k| Some(format!("v-{k}")), true);
-        assert_eq!(w.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["PATH", "USERPROFILE", "CODEX_HOME", "SystemRoot", "TEMP", "TMP"]);
+        assert_eq!(
+            w.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            vec![
+                "PATH",
+                "USERPROFILE",
+                "CODEX_HOME",
+                "SystemRoot",
+                "TEMP",
+                "TMP"
+            ]
+        );
     }
 
     #[test]
     fn a_windows_cmd_shim_goes_through_cmd_exe_with_fixed_arguments_only() {
         let _g = testlock::take();
         let env = vec![("SystemRoot".to_string(), "C:\\Windows".to_string())];
-        let c = build_command(Path::new("C:\\Users\\a\\AppData\\Roaming\\npm\\codex.cmd"), &env, true).unwrap();
-        assert!(c.get_program().to_string_lossy().ends_with("System32\\cmd.exe"));
-        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().to_string()).collect();
-        assert_eq!(args, vec!["/d", "/c", "C:\\Users\\a\\AppData\\Roaming\\npm\\codex.cmd", "app-server"]);
-        for bad in ["C:\\x&calc\\codex.cmd", "C:\\x%PATH%\\codex.cmd", "C:\\x\"y\\codex.cmd", "C:\\x^y\\codex.bat", "C:\\x|y\\codex.cmd"] {
+        let c = build_command(
+            Path::new("C:\\Users\\a\\AppData\\Roaming\\npm\\codex.cmd"),
+            &env,
+            true,
+        )
+        .unwrap();
+        assert!(c
+            .get_program()
+            .to_string_lossy()
+            .ends_with("System32\\cmd.exe"));
+        let args: Vec<String> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "/d",
+                "/c",
+                "C:\\Users\\a\\AppData\\Roaming\\npm\\codex.cmd",
+                "app-server"
+            ]
+        );
+        for bad in [
+            "C:\\x&calc\\codex.cmd",
+            "C:\\x%PATH%\\codex.cmd",
+            "C:\\x\"y\\codex.cmd",
+            "C:\\x^y\\codex.bat",
+            "C:\\x|y\\codex.cmd",
+        ] {
             assert!(build_command(Path::new(bad), &env, true).is_err(), "{bad}");
         }
         let exe = build_command(Path::new("C:\\bin\\codex.exe"), &env, true).unwrap();
@@ -444,7 +644,10 @@ mod windows_tests {
         let _g = testlock::take();
         let env = vec![("SystemRoot".to_string(), "C:\\Windows".to_string())];
         let c = build_command(Path::new("C:\\Users\\a\\npm\\codex.cmd"), &env, true).unwrap();
-        assert!(c.get_program().to_string_lossy().ends_with("System32\\cmd.exe"));
+        assert!(c
+            .get_program()
+            .to_string_lossy()
+            .ends_with("System32\\cmd.exe"));
         let e = build_command(Path::new("C:\\bin\\codex.exe"), &env, true).unwrap();
         assert_eq!(e.get_program().to_string_lossy(), "C:\\bin\\codex.exe");
         assert!(build_command(Path::new("C:\\x&y\\codex.cmd"), &env, true).is_err());
@@ -453,6 +656,13 @@ mod windows_tests {
     #[test]
     fn a_missing_program_is_a_spawn_error_not_a_panic() {
         let _g = testlock::take();
-        assert_eq!(rate_limits(Path::new("C:\\nonexistent\\codex.exe"), Duration::from_secs(1), &[]), Err(AppServerError::Spawn));
+        assert_eq!(
+            rate_limits(
+                Path::new("C:\\nonexistent\\codex.exe"),
+                Duration::from_secs(1),
+                &[]
+            ),
+            Err(AppServerError::Spawn)
+        );
     }
 }

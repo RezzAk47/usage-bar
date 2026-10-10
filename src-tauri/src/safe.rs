@@ -87,7 +87,6 @@ pub fn scrub(text: &str, max: usize) -> String {
     }
 }
 
-
 /// Characters that are invisible or reorder text (format controls, bidi overrides, zero-width, line/paragraph separators).
 fn is_format_control(c: char) -> bool {
     matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{2028}' | '\u{2029}' | '\u{00AD}' | '\u{061C}' | '\u{180E}')
@@ -96,7 +95,10 @@ fn is_format_control(c: char) -> bool {
 /// Text from outside (provider responses, labels) made safe to show or put in a notification or tray title: every control and
 /// format-control character is removed, and the result is cut to `max` characters.
 pub fn strip_display(text: &str, max: usize) -> String {
-    text.chars().filter(|c| !c.is_control() && !is_format_control(*c)).take(max).collect()
+    text.chars()
+        .filter(|c| !c.is_control() && !is_format_control(*c))
+        .take(max)
+        .collect()
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -104,11 +106,21 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 fn base64(data: &[u8], url: bool, pad: bool) -> String {
     let mut out = String::new();
     for ch in data.chunks(3) {
-        let n = (ch[0] as u32) << 16 | (*ch.get(1).unwrap_or(&0) as u32) << 8 | *ch.get(2).unwrap_or(&0) as u32;
+        let n = (ch[0] as u32) << 16
+            | (*ch.get(1).unwrap_or(&0) as u32) << 8
+            | *ch.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
             if i <= ch.len() {
                 let c = B64[((n >> (18 - 6 * i)) & 63) as usize] as char;
-                out.push(if url { match c { '+' => '-', '/' => '_', x => x } } else { c });
+                out.push(if url {
+                    match c {
+                        '+' => '-',
+                        '/' => '_',
+                        x => x,
+                    }
+                } else {
+                    c
+                });
             } else if pad {
                 out.push('=');
             }
@@ -141,7 +153,12 @@ pub fn encodings(token: &str) -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
     for base in [token.to_string(), format!("Bearer {token}")] {
         v.push(base.clone());
-        v.push(serde_json::to_string(&base).unwrap_or_default().trim_matches('"').to_string());
+        v.push(
+            serde_json::to_string(&base)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string(),
+        );
         let u = u_escaped(&base);
         v.push(u.to_uppercase().replace("\\U", "\\u"));
         v.push(u);
@@ -191,7 +208,10 @@ mod tests {
 
     #[test]
     fn display_strings_lose_bidi_and_zero_width_controls() {
-        assert_eq!(strip_display("a\u{202E}b\u{200B}c\u{FEFF}d\u{2028}e\u{7}f\u{2066}g", 50), "abcdefg");
+        assert_eq!(
+            strip_display("a\u{202E}b\u{200B}c\u{FEFF}d\u{2028}e\u{7}f\u{2066}g", 50),
+            "abcdefg"
+        );
         assert_eq!(strip_display(&"x".repeat(100), 40).chars().count(), 40);
         assert_eq!(scrub("ok\u{202E}evil", 50), "okevil");
     }
@@ -203,21 +223,32 @@ mod tests {
         for e in encodings(tok) {
             assert!(leaks_token(&format!("x {e} y"), &s, false), "{e}");
         }
-        assert!(leaks_token(&format!("..{}..", &tok[3..11]), &s, true), "an 8-character piece of a long token");
+        assert!(
+            leaks_token(&format!("..{}..", &tok[3..11]), &s, true),
+            "an 8-character piece of a long token"
+        );
         assert!(!leaks_token(&format!("..{}..", &tok[3..11]), &s, false));
         assert!(!leaks_token("five_hour utilization 85.0", &s, true));
         assert!(!leaks_token("anything", &Secret::new("abc".into()), true));
     }
 
-
     #[test]
     fn scrub_removes_token_shapes() {
         assert_eq!(scrub("Bearer abc.def", 100), "Bearer [redacted]");
-        assert_eq!(scrub("x sk-ant-oat01-AAAAAAAAAAAAAAAAAAAAAAAAAAAA y", 100), "x [redacted] y");
+        assert_eq!(
+            scrub("x sk-ant-oat01-AAAAAAAAAAAAAAAAAAAAAAAAAAAA y", 100),
+            "x [redacted] y"
+        );
         assert_eq!(scrub("a\nb\u{0}c", 100), "a b c");
         assert_eq!(scrub("HTTP 503", 100), "HTTP 503");
         assert!(scrub(&"z".repeat(500), 30).chars().count() <= 31);
-        assert_eq!(scrub("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP", 100), "[redacted]");
+        assert_eq!(
+            scrub(
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP",
+                100
+            ),
+            "[redacted]"
+        );
     }
 
     #[test]
@@ -230,7 +261,10 @@ mod tests {
     #[test]
     fn exact_redaction() {
         let s = Secret::new("tok_ABCDEFGH".into());
-        assert_eq!(redact_exact("{\"echo\":\"Bearer tok_ABCDEFGH\"}", &s), "{\"echo\":\"Bearer [redacted]\"}");
+        assert_eq!(
+            redact_exact("{\"echo\":\"Bearer tok_ABCDEFGH\"}", &s),
+            "{\"echo\":\"Bearer [redacted]\"}"
+        );
         assert_eq!(redact_exact("nothing here", &s), "nothing here");
     }
 }

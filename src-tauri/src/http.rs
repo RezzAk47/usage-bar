@@ -50,7 +50,12 @@ impl HttpError {
 
 /// What the rest of the app needs from the network (a mock in tests, `UreqHttp` for real).
 pub trait Http {
-    fn get_json(&self, url: &str, headers: &[(&str, &str)], token: &Secret) -> Result<Value, HttpError>;
+    fn get_json(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        token: &Secret,
+    ) -> Result<Value, HttpError>;
 }
 
 pub fn json_depth(v: &Value) -> usize {
@@ -84,7 +89,8 @@ pub fn url_allowed(url: &str, test_mode: bool) -> bool {
             return false; // user info before the host is a classic way to point a trusted-looking URL elsewhere
         }
         let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
-        return (host == "api.anthropic.com" || host == "chatgpt.com") && (port.is_empty() || port == "443");
+        return (host == "api.anthropic.com" || host == "chatgpt.com")
+            && (port.is_empty() || port == "443");
     }
     if test_mode {
         if let Some(rest) = url.strip_prefix("http://127.0.0.1:") {
@@ -117,7 +123,11 @@ impl UreqHttp {
 
     fn build(test_mode: bool, timeout: Duration, use_system_proxy: bool) -> UreqHttp {
         // An environment proxy would see the connection (and, for plain http, the token): off unless asked for.
-        let proxy = if use_system_proxy { ureq::Proxy::try_from_env() } else { None };
+        let proxy = if use_system_proxy {
+            ureq::Proxy::try_from_env()
+        } else {
+            None
+        };
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .max_redirects(0)
@@ -140,7 +150,12 @@ fn map_err(e: &ureq::Error) -> HttpError {
 }
 
 impl Http for UreqHttp {
-    fn get_json(&self, url: &str, headers: &[(&str, &str)], token: &Secret) -> Result<Value, HttpError> {
+    fn get_json(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        token: &Secret,
+    ) -> Result<Value, HttpError> {
         if !url_allowed(url, self.test_mode) {
             return Err(HttpError::NotAllowed);
         }
@@ -160,11 +175,22 @@ impl Http for UreqHttp {
             _ => return Err(HttpError::Status(code)),
         }
         let mut body = Vec::new();
-        resp.into_body().into_reader().take(MAX_BODY + 1).read_to_end(&mut body).map_err(|e| {
-            // ureq reports a body that stalls past the deadline as an io::Error wrapping its own Timeout error
-            let wrapped_timeout = e.get_ref().and_then(|x| x.downcast_ref::<ureq::Error>()).is_some_and(|x| matches!(x, ureq::Error::Timeout(_)));
-            if e.kind() == std::io::ErrorKind::TimedOut || wrapped_timeout { HttpError::Timeout } else { HttpError::Network }
-        })?;
+        resp.into_body()
+            .into_reader()
+            .take(MAX_BODY + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| {
+                // ureq reports a body that stalls past the deadline as an io::Error wrapping its own Timeout error
+                let wrapped_timeout = e
+                    .get_ref()
+                    .and_then(|x| x.downcast_ref::<ureq::Error>())
+                    .is_some_and(|x| matches!(x, ureq::Error::Timeout(_)));
+                if e.kind() == std::io::ErrorKind::TimedOut || wrapped_timeout {
+                    HttpError::Timeout
+                } else {
+                    HttpError::Network
+                }
+            })?;
         parse_body(&body, token)
     }
 }
@@ -186,11 +212,24 @@ mod tests {
 
     #[test]
     fn urls_are_checked_before_any_socket() {
-        assert!(url_allowed("https://api.anthropic.com/api/oauth/usage", false));
-        assert!(url_allowed("https://chatgpt.com/backend-api/wham/usage", false));
+        assert!(url_allowed(
+            "https://api.anthropic.com/api/oauth/usage",
+            false
+        ));
+        assert!(url_allowed(
+            "https://chatgpt.com/backend-api/wham/usage",
+            false
+        ));
         for bad in [
-            "http://api.anthropic.com/x", "https://evil.example/x", "https://api.anthropic.com.evil.example/x", "https://chatgpt.com@evil.example/x",
-            "ftp://x", "http://127.0.0.1:1/x", "file:///etc/passwd", "", "https://api.anthropic.com:443@evil/x",
+            "http://api.anthropic.com/x",
+            "https://evil.example/x",
+            "https://api.anthropic.com.evil.example/x",
+            "https://chatgpt.com@evil.example/x",
+            "ftp://x",
+            "http://127.0.0.1:1/x",
+            "file:///etc/passwd",
+            "",
+            "https://api.anthropic.com:443@evil/x",
         ] {
             assert!(!url_allowed(bad, false), "{bad}");
         }
@@ -204,7 +243,10 @@ mod tests {
     #[test]
     fn body_caps_and_depth() {
         assert!(parse_body(b"{\"a\":1}", &tok()).is_ok());
-        assert_eq!(parse_body(&vec![b' '; (MAX_BODY + 1) as usize], &tok()), Err(HttpError::TooLarge));
+        assert_eq!(
+            parse_body(&vec![b' '; (MAX_BODY + 1) as usize], &tok()),
+            Err(HttpError::TooLarge)
+        );
         assert_eq!(parse_body(b"not json", &tok()), Err(HttpError::BadJson));
         assert_eq!(parse_body(&[0xFF, 0xFE], &tok()), Err(HttpError::BadJson));
         let deep = format!("{}1{}", "[".repeat(40), "]".repeat(40));
@@ -212,7 +254,10 @@ mod tests {
         let ok = format!("{}1{}", "[".repeat(10), "]".repeat(10));
         assert!(parse_body(ok.as_bytes(), &tok()).is_ok());
         let way_deep = format!("{}1{}", "[".repeat(100_000), "]".repeat(100_000));
-        assert!(parse_body(way_deep.as_bytes(), &tok()).is_err(), "no stack overflow");
+        assert!(
+            parse_body(way_deep.as_bytes(), &tok()).is_err(),
+            "no stack overflow"
+        );
     }
 
     #[test]
@@ -243,8 +288,14 @@ mod tests {
 
     #[test]
     fn real_request_against_a_local_fake_server() {
-        let (url, h) = serve(reply("200 OK", "", "{\"five_hour\":{\"utilization\":12.5}}"));
-        let v = UreqHttp::new(true).get_json(&url, &[("anthropic-beta", "oauth-2025-04-20")], &tok()).unwrap();
+        let (url, h) = serve(reply(
+            "200 OK",
+            "",
+            "{\"five_hour\":{\"utilization\":12.5}}",
+        ));
+        let v = UreqHttp::new(true)
+            .get_json(&url, &[("anthropic-beta", "oauth-2025-04-20")], &tok())
+            .unwrap();
         assert_eq!(v["five_hour"]["utilization"], 12.5);
         let req = h.join().unwrap().to_lowercase();
         assert!(req.starts_with("get /x"));
@@ -258,14 +309,25 @@ mod tests {
             ("401 Unauthorized", "", HttpError::Unauthorized),
             ("503 Service Unavailable", "", HttpError::Status(503)),
             ("429 Too Many Requests", "", HttpError::Status(429)),
-            ("302 Found", "Location: https://evil.example/steal\r\n", HttpError::Redirect(302)),
+            (
+                "302 Found",
+                "Location: https://evil.example/steal\r\n",
+                HttpError::Redirect(302),
+            ),
         ] {
             let (url, h) = serve(reply(status, extra, "{}"));
-            assert_eq!(UreqHttp::new(true).get_json(&url, &[], &tok()), Err(want.clone()), "{status}");
+            assert_eq!(
+                UreqHttp::new(true).get_json(&url, &[], &tok()),
+                Err(want.clone()),
+                "{status}"
+            );
             let _ = h.join();
         }
         let (url, h) = serve(reply("200 OK", "", "<html>nope</html>"));
-        assert_eq!(UreqHttp::new(true).get_json(&url, &[], &tok()), Err(HttpError::BadJson));
+        assert_eq!(
+            UreqHttp::new(true).get_json(&url, &[], &tok()),
+            Err(HttpError::BadJson)
+        );
         let _ = h.join();
     }
 
@@ -273,7 +335,10 @@ mod tests {
     fn a_response_over_one_megabyte_is_refused() {
         let big = format!("[{}]", "1,".repeat(600_000));
         let (url, h) = serve(reply("200 OK", "", &big));
-        assert_eq!(UreqHttp::new(true).get_json(&url, &[], &tok()), Err(HttpError::TooLarge));
+        assert_eq!(
+            UreqHttp::new(true).get_json(&url, &[], &tok()),
+            Err(HttpError::TooLarge)
+        );
         let _ = h.join();
     }
 
@@ -282,7 +347,10 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://127.0.0.1:{}/x", l.local_addr().unwrap().port());
         drop(l); // nothing listens: connection refused
-        assert_eq!(UreqHttp::new(true).get_json(&url, &[], &tok()), Err(HttpError::Network));
+        assert_eq!(
+            UreqHttp::new(true).get_json(&url, &[], &tok()),
+            Err(HttpError::Network)
+        );
     }
 
     #[test]
@@ -302,7 +370,8 @@ mod tests {
             }
         });
         let t = std::time::Instant::now();
-        let r = UreqHttp::with_timeout(true, Duration::from_millis(700)).get_json(&url, &[], &tok());
+        let r =
+            UreqHttp::with_timeout(true, Duration::from_millis(700)).get_json(&url, &[], &tok());
         assert_eq!(r, Err(HttpError::Timeout));
         assert!(t.elapsed() < Duration::from_secs(3));
     }
@@ -316,7 +385,10 @@ mod tests {
             std::thread::sleep(Duration::from_secs(5));
             drop(s);
         });
-        assert_eq!(UreqHttp::with_timeout(true, Duration::from_millis(500)).get_json(&url, &[], &tok()), Err(HttpError::Timeout));
+        assert_eq!(
+            UreqHttp::with_timeout(true, Duration::from_millis(500)).get_json(&url, &[], &tok()),
+            Err(HttpError::Timeout)
+        );
     }
 
     /// The system proxy variables are ignored unless the user switched "Use system proxy settings" on.
@@ -326,7 +398,14 @@ mod tests {
         proxy.set_nonblocking(true).unwrap();
         let purl = format!("http://127.0.0.1:{}", proxy.local_addr().unwrap().port());
         // SAFETY: tests in this module that read these variables run in this one test only
-        for k in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"] {
+        for k in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+        ] {
             std::env::set_var(k, &purl);
         }
         std::env::remove_var("NO_PROXY");
@@ -337,14 +416,27 @@ mod tests {
         assert!(direct.get_json(&url, &[], &tok()).is_ok());
         h.join().unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        assert!(proxy.accept().is_err(), "the proxy was contacted although system proxies are off");
+        assert!(
+            proxy.accept().is_err(),
+            "the proxy was contacted although system proxies are off"
+        );
         // enabled: the request goes to the proxy (which never answers, so the call fails fast)
         let via = UreqHttp::build(true, Duration::from_millis(500), true);
         let (url2, _h2) = serve(reply("200 OK", "", "{}"));
         let _ = via.get_json(&url2, &[], &tok());
         std::thread::sleep(Duration::from_millis(100));
-        assert!(proxy.accept().is_ok(), "with system proxies on, the proxy should be contacted");
-        for k in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"] {
+        assert!(
+            proxy.accept().is_ok(),
+            "with system proxies on, the proxy should be contacted"
+        );
+        for k in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+        ] {
             std::env::remove_var(k);
         }
     }
@@ -352,12 +444,21 @@ mod tests {
     #[test]
     fn plain_http_is_refused_in_normal_mode() {
         let (url, _h) = serve(reply("200 OK", "", "{}"));
-        assert_eq!(UreqHttp::new(false).get_json(&url, &[], &tok()), Err(HttpError::NotAllowed));
+        assert_eq!(
+            UreqHttp::new(false).get_json(&url, &[], &tok()),
+            Err(HttpError::NotAllowed)
+        );
     }
 
     #[test]
     fn reasons_are_fixed_phrases() {
-        for e in [HttpError::Unauthorized, HttpError::Status(500), HttpError::Timeout, HttpError::Network, HttpError::BadJson] {
+        for e in [
+            HttpError::Unauthorized,
+            HttpError::Status(500),
+            HttpError::Timeout,
+            HttpError::Network,
+            HttpError::BadJson,
+        ] {
             assert!(!describe(&e).contains("Bearer"));
         }
     }
