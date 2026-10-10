@@ -32,10 +32,15 @@ const isEntry = (e: unknown, now: number): e is Entry => {
     isInt(o.w) && isInt(o.v) && isInt(o.t) && o.w >= 0 && o.w < 1e12 && o.v > 0 && o.v <= 100 && o.t > 0 && o.t <= now + MAX_FUTURE;
 };
 
-/** Entries within KEEP_SECONDS of the newest moment we know: the clock or the newest entry, whichever is later (clock-set-back safe). */
+/**
+ * Entries within KEEP_SECONDS of the newest moment we know: the clock or the newest entry, whichever is later (clock-set-back safe).
+ * When the clock is more than a day BEHIND the newest record (it was set far ahead and came back), age tells nothing: the real
+ * records are kept, because pruning them would let their alerts fire again.
+ */
 function fresh(entries: Entry[], now: number): Entry[] {
   let ref = now;
   for (const e of entries) ref = Math.max(ref, e.t);
+  if (ref - now > 86400) return entries;
   return entries.filter((e) => ref - e.t <= KEEP_SECONDS);
 }
 

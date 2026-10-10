@@ -195,6 +195,20 @@ describe('clock jumps', () => {
     await rig.run(a, prov('claude', ['5h limit', 90, rig.now + 3600]));
     expect(rig.shown.length).toBe(2);
   });
+  it('after a wrong clock was set far forward and back, real older records are kept and do not alert again', async () => {
+    const real = { p: 'Claude Code', l: '5h limit', w: NOW + 3600, v: 80, t: NOW - 6 * DAY };
+    const wrong = { p: 'Codex CLI', l: '5h limit', w: NOW + 30 * DAY, v: 80, t: NOW + 30 * DAY }; // written while the clock was a month ahead
+    const a = rig.make(JSON.stringify({ version: 1, fired: [real, wrong] }));
+    expect(a.fired.length).toBe(2); // the clock is now more than a day behind the newest record: nothing is pruned
+    await rig.run(a, prov('claude', ['5h limit', 85, NOW + 3600]));
+    expect(rig.shown).toEqual([]);
+    expect(a.fired.length).toBe(2);
+  });
+  it('a clock that is only a few hours behind a record still prunes by age', () => {
+    const old = { p: 'Claude Code', l: '5h limit', w: NOW - 9 * DAY, v: 80, t: NOW - 9 * DAY };
+    const ahead = { p: 'Codex CLI', l: '5h limit', w: NOW, v: 80, t: NOW + 3 * 3600 };
+    expect(rig.make(JSON.stringify({ version: 1, fired: [old, ahead] })).fired.map((e) => e.p)).toEqual(['Codex CLI']);
+  });
   it('junk entries far in the future are dropped on load', () => {
     const junk = { p: 'Claude Code', l: '5h limit', w: 0, v: 80, t: NOW + 1000 * DAY };
     expect(rig.make(JSON.stringify({ version: 1, fired: [junk] })).fired).toEqual([]);
