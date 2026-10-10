@@ -173,6 +173,22 @@ fn kill_tree(child: &mut std::process::Child) {
     }
 }
 
+/// Starts a process, retrying a few times when the system says the executable is still open for writing (ETXTBSY, errno 26).
+/// That happens when another thread forks at the moment a program file was just written: the child briefly holds a copy of the
+/// write descriptor. It clears within milliseconds, so a short retry makes the start deterministic instead of a rare `Spawn` error.
+fn spawn_retrying<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut tries = 0;
+    loop {
+        match f() {
+            Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            r => return r,
+        }
+    }
+}
+
 fn send(stdin: &mut impl Write, v: &Value) -> bool {
     let mut s = v.to_string();
     s.push('\n');
@@ -189,7 +205,7 @@ pub fn rate_limits(
     env: &[(String, String)],
 ) -> Result<Value, AppServerError> {
     let mut cmd = build_command(bin, env, cfg!(windows))?;
-    let mut child = cmd.spawn().map_err(|_| AppServerError::Spawn)?;
+    let mut child = spawn_retrying(|| cmd.spawn()).map_err(|_| AppServerError::Spawn)?;
     let mut reader: Option<std::thread::JoinHandle<()>> = None;
     let result = (|| {
         let mut stdin = child.stdin.take().ok_or(AppServerError::Spawn)?;
@@ -356,6 +372,22 @@ sleep 30"#,
                 ["usedPercent"],
             3
         );
+    }
+
+    #[test]
+    fn a_busy_executable_is_retried_not_reported_as_spawn_failure() {
+        let mut n = 0;
+        let r = spawn_retrying(|| {
+            n += 1;
+            if n < 3 {
+                Err(std::io::Error::from_raw_os_error(26))
+            } else {
+                Ok(n)
+            }
+        });
+        assert_eq!(r.unwrap(), 3);
+        let other = spawn_retrying::<()>(|| Err(std::io::Error::from_raw_os_error(2)));
+        assert_eq!(other.unwrap_err().raw_os_error(), Some(2));
     }
 
     #[test]
