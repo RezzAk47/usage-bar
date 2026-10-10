@@ -81,7 +81,10 @@ export class Engine {
   static COOLDOWN_S = 10;
 
   /** Seconds until the Refresh button works again (0 = ready). */
-  cooldownLeft(): number { return Math.max(0, Math.ceil(this.lastManual + Engine.COOLDOWN_S - this.nowSec())); }
+  cooldownLeft(): number {
+    // capped: a wall clock set back after a click must not lock the button for the size of the change
+    return Math.min(Engine.COOLDOWN_S, Math.max(0, Math.ceil(this.lastManual + Engine.COOLDOWN_S - this.nowSec())));
+  }
 
   /** The Refresh button: every provider is due now (backoff is skipped on purpose), at most once per 10 s. */
   refreshNow(): Promise<void> {

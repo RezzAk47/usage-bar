@@ -131,7 +131,17 @@ export class FetchSchedule {
   nextAt: Record<string, number> = {};
   constructor(private ids: readonly string[], private rand: () => number = Math.random) {}
 
-  due(now: number): string[] { return this.ids.filter((id) => (this.nextAt[id] ?? 0) <= now); }
+  /**
+   * Due providers. A next time further ahead than the longest jittered backoff can only mean the wall clock was set back:
+   * that provider is due now instead of waiting out the size of the clock change.
+   */
+  due(now: number): string[] {
+    const longest = Math.ceil(MAX_BACKOFF_SECONDS * 1.1) + 1;
+    return this.ids.filter((id) => {
+      const at = this.nextAt[id] ?? 0;
+      return at <= now || at - now > longest;
+    });
+  }
 
   /** Make every provider due right away (the Refresh button): backoff is skipped on purpose. */
   expedite(now: number): void { for (const id of this.ids) this.nextAt[id] = now; }

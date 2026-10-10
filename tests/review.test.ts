@@ -54,6 +54,28 @@ describe('manual refresh cooldown (item 11)', () => {
   });
 });
 
+describe('the wall clock is set back', () => {
+  it('the schedule does not stall: a next time further ahead than any backoff means the clock moved back', () => {
+    const s = new FetchSchedule(['claude'], () => 0.5);
+    s.record('claude', true, 1_800_000_000); // next fetch at +60 s
+    expect(s.due(1_800_000_000 + 61)).toEqual(['claude']);
+    // the user (or a big NTP correction) sets the clock back one hour: refreshes must not stop for an hour
+    expect(s.due(1_800_000_000 - 3600)).toEqual(['claude']);
+    // a normal wait is still respected
+    s.record('claude', false, 1_800_000_000);
+    expect(s.due(1_800_000_000 + 1)).toEqual([]);
+  });
+
+  it('the Refresh button cooldown never exceeds 10 s', async () => {
+    const { e, advance } = rig({ claude: ok(10), codex: { id: 'codex', status: 'not_installed' } });
+    await e.start(); await e.first;
+    advance(100);
+    await e.refreshNow();
+    advance(-3600); // clock set back one hour
+    expect(e.cooldownLeft()).toBeLessThanOrEqual(10);
+  });
+});
+
 describe('backoff survives a restart and a wake is staggered (item 11)', () => {
   it('failures and next-allowed time are saved and loaded', async () => {
     const down = { id: 'claude' as const, status: 'unavailable' as const, reason: 'x' };
