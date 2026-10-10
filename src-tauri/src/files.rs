@@ -265,28 +265,41 @@ pub fn retry_transient<T>(
     }
 }
 
-/// Holds `<real file>.lock` exclusively (the same file another tool locks) until dropped. Waits up to 5 s.
-/// A folder we cannot create the lock in just means "no lock": the compare-and-swap still protects the write.
+/// How long a write waits for another program's lock. Shorter than the 5 s the shell gives a file operation (lib.rs
+/// `off_main`), so the page hears the real reason instead of a timeout while the write still runs on behind its back.
+pub const LOCK_WAIT: Duration = Duration::from_secs(3);
+const _: () = assert!(
+    LOCK_WAIT.as_secs() < 5,
+    "keep the lock wait under the shell's 5 s limit"
+);
+pub const BUSY: &str = "is busy (another program holds its lock); nothing was written";
+
+/// Holds `<real file>.lock` exclusively (the same file another tool locks) until dropped.
+/// A folder we cannot create the lock in, or a file system without locks, just means "no lock": the compare-and-swap still
+/// protects the write. A lock that another program HOLDS past the wait is an error: the write never goes ahead unlocked.
 struct Lock(Option<fs::File>);
 
 impl Lock {
-    fn take(target: &Path) -> Lock {
-        let lock_path = PathBuf::from(format!("{}.lock", target.display()));
+    fn take(target: &Path, wait: Duration) -> Result<Lock, ()> {
+        // built on the OS string, so a folder name that is not valid UTF-8 still locks the right file
+        let mut lock_path = target.as_os_str().to_os_string();
+        lock_path.push(".lock");
         let Ok(f) = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&lock_path)
+            .open(PathBuf::from(lock_path))
         else {
-            return Lock(None);
+            return Ok(Lock(None));
         };
         let t0 = std::time::Instant::now();
         loop {
             match f.try_lock() {
-                Ok(()) => return Lock(Some(f)),
-                Err(fs::TryLockError::WouldBlock) if t0.elapsed() < Duration::from_secs(5) => {
+                Ok(()) => return Ok(Lock(Some(f))),
+                Err(fs::TryLockError::WouldBlock) if t0.elapsed() < wait => {
                     std::thread::sleep(Duration::from_millis(5))
                 }
-                Err(_) => return Lock(None),
+                Err(fs::TryLockError::WouldBlock) => return Err(()),
+                Err(_) => return Ok(Lock(None)),
             }
         }
     }
@@ -307,10 +320,20 @@ pub fn write(
     text: &str,
     check: Option<Option<Stamp>>,
 ) -> Result<(), String> {
+    write_waiting(dir, name, text, check, LOCK_WAIT)
+}
+
+fn write_waiting(
+    dir: &Path,
+    name: &str,
+    text: &str,
+    check: Option<Option<Stamp>>,
+    lock_wait: Duration,
+) -> Result<(), String> {
     let p = resolve(dir, name)?;
     fs::create_dir_all(dir).map_err(|e| format!("cannot create the data folder: {e}"))?;
     let target = plan_target(&p, name)?; // refuses before any file (even the lock file) is created
-    let _lock = Lock::take(&target.path);
+    let _lock = Lock::take(&target.path, lock_wait).map_err(|_| format!("{name} {BUSY}"))?;
     if let Some(expected) = check {
         let current = fs::metadata(&p).ok().map(|m| stamp_of(&m));
         if current != expected {
@@ -730,6 +753,39 @@ mod tests {
         write(d.path(), "settings.json", "aaaa", None).unwrap();
         let b = stat(d.path(), "settings.json").unwrap().unwrap();
         assert_ne!(a, b);
+    }
+
+    /// Another program holds `<file>.lock` for longer than the wait: the write is refused with a clear error. It used to go
+    /// ahead WITHOUT the lock after the wait (after the page had already been told the save timed out), so the other program's
+    /// read-check-write could interleave with ours.
+    #[test]
+    fn a_lock_held_elsewhere_refuses_the_write_instead_of_writing_unlocked() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "settings.json", "old", None).unwrap();
+        let holder = fs::OpenOptions::new()
+            .append(true)
+            .open(d.path().join("settings.json.lock"))
+            .unwrap();
+        holder.lock().unwrap();
+        let e = write_waiting(
+            d.path(),
+            "settings.json",
+            "new",
+            None,
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert!(e.contains("busy"), "{e}");
+        assert_eq!(
+            read(d.path(), "settings.json").unwrap().as_deref(),
+            Some("old")
+        );
+        holder.unlock().unwrap();
+        write(d.path(), "settings.json", "new", None).unwrap();
+        assert_eq!(
+            read(d.path(), "settings.json").unwrap().as_deref(),
+            Some("new")
+        );
     }
 
     #[test]
