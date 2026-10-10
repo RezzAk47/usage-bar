@@ -455,13 +455,25 @@ pub fn move_aside(dir: &Path, name: &str, backup: &str) -> Result<String, String
             .canonicalize()
             .unwrap_or_else(|_| dir.to_path_buf())
             .join(&unique);
-        // symlink_metadata sees a dangling symlink too; a name that exists in any form is skipped
-        if fs::symlink_metadata(&to).is_ok() {
-            continue;
+        // The name is RESERVED by creating it exclusively (create_new fails for any existing name, a dangling symlink included,
+        // and never follows a link), so no other writer can take it between the check and the rename. The rename then replaces
+        // only our own empty placeholder.
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&to)
+        {
+            Ok(f) => drop(f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not keep a backup of {name}: {e}")),
         }
-        return fs::rename(&from, &to)
-            .map(|_| unique)
-            .map_err(|e| format!("could not keep a backup of {name}: {e}"));
+        return match fs::rename(&from, &to) {
+            Ok(()) => Ok(unique),
+            Err(e) => {
+                let _ = fs::remove_file(&to);
+                Err(format!("could not keep a backup of {name}: {e}"))
+            }
+        };
     }
     Err("could not find an unused backup name".into())
 }
@@ -797,9 +809,15 @@ mod tests {
             "broken",
             "the first backup is untouched"
         );
+        let before = fs::read_dir(d.path()).unwrap().count();
         assert!(
             move_aside(d.path(), "settings.json", "settings.broken-1-abc.json").is_err(),
             "source is gone now"
+        );
+        assert_eq!(
+            fs::read_dir(d.path()).unwrap().count(),
+            before,
+            "a failed move leaves no placeholder behind"
         );
         write(d.path(), "settings.json", "third", None).unwrap();
         assert!(move_aside(d.path(), "settings.json", "settings.json").is_err());
