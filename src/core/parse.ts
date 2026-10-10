@@ -57,9 +57,13 @@ export function parseClaudeUsage(raw: unknown, now: number): Parsed {
 function windowName(seconds: number | null, fallback: string): string {
   if (seconds === null || seconds <= 0) return fallback;
   const hours = seconds / 3600;
-  if (hours <= 6) return '5h';
+  if (hours >= 4.5 && hours <= 5.5) return '5h'; // only a window of about five hours is "5h"
   if (hours >= 6 * 24 && hours <= 8 * 24) return 'Weekly';
-  return hours < 48 ? `${Math.round(hours)}h` : `${Math.round(hours / 24)}d`;
+  if (hours >= 48) return `${Math.round(hours / 24)}d`;
+  const mins = Math.max(1, Math.round(seconds / 60));
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
 }
 
 function codexWindow(w: unknown, fallbackName: string, group: string, now: number, out: Parsed, usedKeys: string[], resetKeys: string[]): void {

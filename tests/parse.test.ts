@@ -66,6 +66,22 @@ describe('Codex responses', () => {
     expect(p.tier).toBe('Plus plan');
     expect(p.limits[0].resetAt).toBe(1900000000);
   });
+  it('a window is named from its real length: 5h only when about five hours', () => {
+    const label = (mins: number | undefined) => {
+      const primary: Record<string, unknown> = { usedPercent: 10, resetsAt: 1900000000 };
+      if (mins !== undefined) primary.windowDurationMins = mins;
+      return parseCodexUsage({ rateLimits: { primary } }, NOW).limits[0].label;
+    };
+    expect(label(300)).toBe('5h limit');
+    expect(label(290)).toBe('5h limit');
+    expect(label(180)).toBe('3h limit');
+    expect(label(90)).toBe('1h 30m limit');
+    expect(label(45)).toBe('45m limit');
+    expect(label(360)).toBe('6h limit');
+    expect(label(1440)).toBe('24h limit');
+    expect(label(10080)).toBe('Weekly limit');
+    expect(label(undefined)).toBe('5h limit'); // no length given: the provider's own name for the slot
+  });
   it('reset_after_seconds is relative to the fetch time', () => {
     expect(parseCodexUsage(codex.afterOnly, NOW).limits[0].resetAt).toBe(NOW + 600);
   });
