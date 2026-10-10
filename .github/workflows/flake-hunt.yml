@@ -1,0 +1,64 @@
+# Manual only: runs the app-server tests 150 times on each OS to hunt for a flaky test.
+name: flake-hunt
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system packages (WebKitGTK, tray, build tools)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install npm packages and build the page (the Rust build needs it)
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Build the tests once
+        working-directory: src-tauri
+        run: cargo test --locked --no-run
+
+      - name: Run the app-server tests 150 times
+        working-directory: src-tauri
+        run: |
+          for i in $(seq 1 150); do
+            if ! out=$(cargo test --locked appserver::tests:: 2>&1); then
+              echo "FAILED on run $i"
+              echo "$out"
+              exit 1
+            fi
+          done
+          echo "150 runs passed"
