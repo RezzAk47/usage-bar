@@ -829,6 +829,54 @@ mod tests {
         );
     }
 
+    /// Four writers move four different files aside under the SAME backup name, over and over. The suffix is time based, so two of
+    /// them can pick the same candidate in the same tick: with check-then-rename the later rename silently replaced the earlier
+    /// backup. With the exclusive reservation every backup keeps its own content.
+    #[test]
+    fn concurrent_move_asides_never_replace_each_others_backups() {
+        let d = tempfile::tempdir().unwrap();
+        let names = [
+            "settings.json",
+            "usage-alerts.json",
+            "usage-history.json",
+            "usage-backoff.json",
+        ];
+        let barrier = std::sync::Barrier::new(names.len());
+        let kept: Vec<(String, String)> = std::thread::scope(|sc| {
+            let hs: Vec<_> = names
+                .iter()
+                .map(|name| {
+                    let (dir, barrier) = (d.path(), &barrier);
+                    sc.spawn(move || {
+                        let mut out = Vec::new();
+                        for k in 0..60 {
+                            let text = format!("{name}-{k}");
+                            write(dir, name, &text, None).unwrap();
+                            barrier.wait(); // all four start each round at the same moment
+                            let to = move_aside(dir, name, "settings.broken-1-abc.json").unwrap();
+                            out.push((to, text));
+                        }
+                        out
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        let mut seen = std::collections::HashSet::new();
+        for (to, text) in &kept {
+            assert!(
+                seen.insert(to.clone()),
+                "the backup name {to} was handed out twice"
+            );
+            assert_eq!(
+                &fs::read_to_string(d.path().join(to)).unwrap(),
+                text,
+                "{to} was replaced by another backup"
+            );
+        }
+        assert_eq!(kept.len(), 240);
+    }
+
     #[cfg(unix)]
     #[test]
     fn move_aside_never_overwrites_a_dangling_symlink() {
