@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { DecodeError, stableStringify } from '../src/core/json';
 import { defaultSettings, mergeSettings, parseSettings, settingsToObject } from '../src/core/settings';
 import { SettingsStore } from '../src/core/settingsStore';
-import { nodeIO, tmpDir } from './helpers';
+import { bumpMtime, nodeIO, tmpDir } from './helpers';
+import { MemoryIO } from '../src/backend/memory';
 import fs from 'node:fs';
 
 describe('strict decode', () => {
@@ -77,5 +78,54 @@ describe('SettingsStore on a real folder', () => {
     const t = new Date(Date.now() + 5000); fs.utimesSync(`${dir}/settings.json`, t, t);
     await store.update({ alertLow: 60 });
     expect(JSON.parse(fs.readFileSync(`${dir}/settings.json`, 'utf8'))).toMatchObject({ theme: 'ocean', usage_rows: 9, alert_low: 60 });
+  });
+});
+
+describe('SettingsStore races and error values', () => {
+  it('a hand edit that lands between the read and the write of a save is not lost', async () => {
+    const dir = tmpDir();
+    const io = nodeIO(dir);
+    const store = new SettingsStore(io);
+    await store.init();
+    await store.update({ theme: 'ocean' });
+    // the next read of settings.json is followed at once by an outside edit (an editor, another tool) before our write
+    let armed = true;
+    const racy = {
+      ...io,
+      async read(n: string) {
+        const t = await io.read(n);
+        if (armed && n === 'settings.json' && t !== null) {
+          armed = false;
+          fs.writeFileSync(`${dir}/settings.json`, JSON.stringify({ ...JSON.parse(t), usage_rows: 7, hand: 'edit' }));
+          bumpMtime(`${dir}/settings.json`);
+        }
+        return t;
+      },
+    };
+    (store as unknown as { io: typeof racy }).io = racy;
+    await store.update({ alertLow: 60 });
+    const disk = JSON.parse(fs.readFileSync(`${dir}/settings.json`, 'utf8'));
+    expect(disk).toMatchObject({ theme: 'ocean', alert_low: 60, usage_rows: 7, hand: 'edit' });
+    expect(store.saveError).toBeNull();
+  });
+
+  it('a backup that cannot be made reports the real reason, not "undefined"', async () => {
+    const mem = new MemoryIO();
+    await mem.write('settings.json', '{broken');
+    mem.moveAside = async () => { throw 'could not keep a backup of settings.json: disk full'; }; // Tauri rejects with a string
+    const store = new SettingsStore(mem);
+    await store.init();
+    await store.resetToDefaults();
+    expect(store.saveError).toContain('disk full');
+    expect(store.saveError).not.toContain('undefined');
+  });
+
+  it('a failed write reports the real reason when the error is a plain string', async () => {
+    const mem = new MemoryIO();
+    mem.write = async () => { throw 'could not write settings.json: read-only file system'; };
+    const store = new SettingsStore(mem);
+    await store.init();
+    await store.update({ theme: 'grape' });
+    expect(store.saveError).toContain('read-only file system');
   });
 });

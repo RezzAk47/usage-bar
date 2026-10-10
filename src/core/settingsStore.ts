@@ -1,6 +1,6 @@
 // settings.json: strict about what it will overwrite. A file that cannot be read is never overwritten, unknown keys
 // survive a save, a hand edit made while the app runs is merged (only the keys changed here are applied on top).
-import { FileIO, FileStamp, Queue, errMessage, sameStamp } from './io';
+import { FileIO, FileStamp, Queue, errMessage, isConflict, sameStamp } from './io';
 import { SETTINGS_FILE } from './datadir';
 import { stableStringify, Extra } from './json';
 import { AppSettings, defaultSettings, mergeSettings, parseSettings, settingsToObject, validated } from './settings';
@@ -61,7 +61,7 @@ export class SettingsStore {
       this.loadError = null; this.saveError = null;
     } catch (e) {
       this.settings = defaultSettings(); this.baseline = defaultSettings(); this.extra = {}; this.lastStamp = stamp;
-      this.loadError = `settings.json could not be read (${(e as Error).message}). Defaults are in use and the file is untouched.`;
+      this.loadError = `settings.json could not be read (${errMessage(e)}). Defaults are in use and the file is untouched.`;
     }
   }
 
@@ -77,35 +77,44 @@ export class SettingsStore {
   private async save(): Promise<boolean> {
     if (this.loadError !== null) return false; // never overwrite a file we could not read
     try {
-      let toSave = this.settings;
-      let extra = this.extra;
-      const stamp = await this.io.stat(SETTINGS_FILE);
-      if (stamp !== null) {
-        const old = await this.io.read(SETTINGS_FILE);
-        if (old !== null) {
-          try {
-            const disk = parseSettings(old);
-            extra = disk.extra;
-            if (!sameStamp(stamp, this.lastStamp)) {
-              // Edited by hand while the app runs: start from the file and apply only the keys changed here.
-              toSave = mergeSettings(disk.settings, this.settings, this.baseline);
-              this.settings = toSave;
+      // compare-and-swap: the write only lands on the very file that was read and merged; an edit that slips in between makes
+      // the write fail with a conflict, and the merge is done again on the newer file (a few times at most)
+      for (let attempt = 0; ; attempt++) {
+        let toSave = this.settings;
+        let extra = this.extra;
+        const stamp = await this.io.stat(SETTINGS_FILE);
+        if (stamp !== null) {
+          const old = await this.io.read(SETTINGS_FILE);
+          if (old !== null) {
+            try {
+              const disk = parseSettings(old);
+              extra = disk.extra;
+              if (!sameStamp(stamp, this.lastStamp)) {
+                // Edited by hand while the app runs: start from the file and apply only the keys changed here.
+                toSave = mergeSettings(disk.settings, this.settings, this.baseline);
+                this.settings = toSave;
+              }
+            } catch (e) {
+              // It became unreadable after launch: same as a file that was bad at launch. Do not overwrite it.
+              this.loadError = `settings.json could not be read (${errMessage(e)}). Defaults are in use and the file is untouched.`;
+              return false;
             }
-          } catch (e) {
-            // It became unreadable after launch: same as a file that was bad at launch. Do not overwrite it.
-            this.loadError = `settings.json could not be read (${(e as Error).message}). Defaults are in use and the file is untouched.`;
-            return false;
           }
         }
+        try {
+          await this.io.write(SETTINGS_FILE, stableStringify(settingsToObject(toSave, extra)) + '\n', stamp);
+        } catch (e) {
+          if (isConflict(e) && attempt < 3) continue;
+          throw e;
+        }
+        this.extra = extra;
+        this.baseline = toSave;
+        this.lastStamp = await this.io.stat(SETTINGS_FILE);
+        this.saveError = null; this.ignoredNotes = [];
+        return true;
       }
-      await this.io.write(SETTINGS_FILE, stableStringify(settingsToObject(toSave, extra)) + '\n');
-      this.extra = extra;
-      this.baseline = toSave;
-      this.lastStamp = await this.io.stat(SETTINGS_FILE);
-      this.saveError = null; this.ignoredNotes = [];
-      return true;
     } catch (e) {
-      this.saveError = (e as Error).message;
+      this.saveError = errMessage(e);
       return false;
     }
   }
@@ -122,7 +131,7 @@ export class SettingsStore {
         this.loadError = null; // already gone: nothing to keep
       } else if (this.loadError !== null) {
         try { await this.io.moveAside(SETTINGS_FILE, `settings.broken-${Date.now()}.json`); } catch (e) {
-          this.saveError = `Could not keep a backup, so nothing was changed: ${(e as Error).message}`;
+          this.saveError = `Could not keep a backup, so nothing was changed: ${errMessage(e)}`;
           this.emit();
           return;
         }
