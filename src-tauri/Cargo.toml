@@ -1,0 +1,43 @@
+[package]
+name = "usage-bar-cross"
+version = "0.1.0"
+description = "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your Claude Code and Codex limits is used."
+edition = "2021"
+rust-version = "1.90"
+publish = false
+license = "MIT"
+
+[lib]
+name = "usage_bar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# The only network code in the app: ureq 3 with rustls (webpki roots), pinned. Used only from src/http.rs.
+# Every log macro is compiled out (also for ureq, rustls, hyper-style crates): no log line can ever carry an Authorization value.
+log = { version = "0.4", features = ["max_level_off", "release_max_level_off"] }
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,119 @@
+# Release workflow: builds unsigned installers for macOS (Apple silicon and Intel), Windows and Linux when a tag
+# like v0.1.0 is pushed, and attaches them to a DRAFT GitHub Release. NOT YET EXECUTED: GitHub Actions has never
+# run this file. Expect small fixes on the first real run.
+#
+# Pins: tauri-apps/tauri-action is pinned to a full commit SHA (tag action-v1.0.0, verified with the GitHub API).
+# The other actions are pinned to full commit SHAs as well.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual runs must be started on a tag ref (the version check below fails on a branch).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            rust-targets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles dmg
+          - name: macOS (Intel)
+            os: macos-latest
+            rust-targets: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles dmg
+          - name: Windows
+            os: windows-latest
+            rust-targets: ''
+            args: --bundles nsis
+          - name: Linux
+            os: ubuntu-22.04
+            rust-targets: ''
+            args: --bundles deb,appimage
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Tag must match the version in tauri.conf.json
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::This workflow must run on a tag (got $REF_TYPE $REF_NAME)."
+            exit 1
+          fi
+          node -e '
+            const tag = process.env.REF_NAME;
+            const conf = require("./src-tauri/tauri.conf.json").version;
+            const pkg = require("./package.json").version;
+            const cargo = (require("fs").readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version\s*=\s*"([^"]+)"/m) || [])[1];
+            console.log("tag=" + tag + " tauri.conf.json=" + conf + " package.json=" + pkg + " Cargo.toml=" + cargo);
+            if (tag !== "v" + conf) { console.error("::error::Tag " + tag + " does not match tauri.conf.json version " + conf); process.exit(1); }
+            if (pkg !== conf || cargo !== conf) { console.error("::error::package.json, Cargo.toml and tauri.conf.json versions differ"); process.exit(1); }
+          '
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system packages (WebKitGTK, tray, build tools)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install npm packages
+        run: npm ci --ignore-scripts
+
+      - name: Build the page (needed by the Rust build)
+        run: npm run build
+
+      - name: Build installers and attach them to a draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Usage Bar v__VERSION__'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} -- --locked
+          releaseBody: |
+            Unsigned builds of Usage Bar. They are not code-signed or notarised, so your system will warn you the first time.
+
+            **macOS:** open the .dmg and drag the app to Applications. Right-click the app and choose Open, then Open again. If it is still blocked, go to System Settings > Privacy & Security and click Open Anyway.
+
+            **Windows:** if SmartScreen says "Windows protected your PC", click More info, then Run anyway.
+
+            **Linux:** install the .deb, or make the .AppImage executable and run it.
+
+            Licence: MIT.

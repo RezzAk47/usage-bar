@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the one popup window may do: read and write its own data files, ask Rust for usage, show a notification, set the tray text, toggle autostart. No file-system plugin, no shell plugin, no http plugin, no opener or notification plugin access from the page.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-app-info",
+    "allow-fs-read",
+    "allow-fs-stat",
+    "allow-fs-write",
+    "allow-fs-move-aside",
+    "allow-set-tray-label",
+    "allow-hide-popup",
+    "allow-quit-app",
+    "allow-fetch-usage",
+    "allow-notify",
+    "allow-open-usage-page",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
+}

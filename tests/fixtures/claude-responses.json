@@ -1,0 +1,22 @@
+{
+  "normal": {
+    "five_hour": { "utilization": 22.0, "resets_at": "2026-10-07T17:19:00.123456+00:00" },
+    "seven_day": { "utilization": 75, "resets_at": "2026-10-09T19:00:00Z" },
+    "seven_day_opus": { "utilization": 0.5, "resets_at": 1900000000 },
+    "seven_day_sonnet": { "utilization": 0, "resets_at": null },
+    "seven_day_oauth_apps": null,
+    "extra_usage": { "is_enabled": true, "monthly_limit": 5000, "used_credits": 120, "utilization": 2.4 }
+  },
+  "weird": {
+    "five_hour": { "utilization": "37.5", "resets_at": "1900000000000" },
+    "seven_day": { "utilization": 140, "resets_at": "garbage" },
+    "seven_day_opus": { "utilization": -3 },
+    "seven_day_x_y": { "utilization": true },
+    "seven_day_sonnet": { "utilization": "abc" },
+    "future_window": { "utilization": 10 },
+    "extra_usage": { "is_enabled": false, "utilization": 50 }
+  },
+  "empty": {},
+  "allNull": { "five_hour": null, "seven_day": { "utilization": null } },
+  "notAnObject": [1, 2, 3]
+}

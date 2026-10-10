@@ -1,0 +1,34 @@
+{
+  "name": "usage-bar-cross",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your Claude Code and Codex limits is used.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "shots": "node scripts/screenshots.mjs",
+    "ui:smoke": "node scripts/ui-smoke.mjs",
+    "token-leak": "node scripts/real-run.mjs src-tauri/target/debug/usage-bar-cross 10",
+    "log-guard": "node scripts/log-guard.mjs",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.1",
+    "@tauri-apps/plugin-autostart": "2.7.0",
+    "@tauri-apps/plugin-notification": "2.5.1",
+    "@tauri-apps/plugin-opener": "2.7.0",
+    "preact": "11.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@tauri-apps/cli": "2.12.1",
+    "@types/node": "26.6.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

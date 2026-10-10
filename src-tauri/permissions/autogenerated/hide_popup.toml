@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hide-popup"
+description = "Enables the hide_popup command without any pre-configured scope."
+commands.allow = ["hide_popup"]
+
+[[permission]]
+identifier = "deny-hide-popup"
+description = "Denies the hide_popup command without any pre-configured scope."
+commands.deny = ["hide_popup"]

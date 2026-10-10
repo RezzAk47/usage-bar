@@ -1,0 +1,14 @@
+[
+  { "left": 8040, "want": "in 2 h 14 min" },
+  { "left": 273600, "want": "in 3 d 4 h" },
+  { "left": 2700, "want": "in 45 min" },
+  { "left": 3600, "want": "in 1 h" },
+  { "left": 86400, "want": "in 1 d" },
+  { "left": 20, "want": "in 1 min" },
+  { "left": 3541, "want": "in 1 h" },
+  { "left": 0, "want": "resetting" },
+  { "left": -5000, "want": "resetting" },
+  { "left": 604799, "want": "in 7 d" },
+  { "left": 59, "want": "in 1 min" },
+  { "left": 61, "want": "in 2 min" }
+]
