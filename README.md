@@ -17,7 +17,7 @@ Screenshots use made-up sample numbers (light, then dark with the 7-day history)
 >
 > Usage Bar is an independent project. It is not affiliated with, endorsed by or sponsored by Anthropic or OpenAI. Claude, Claude Code, Codex, ChatGPT and OpenAI are trademarks of their respective owners.
 
-**Status: early (v0.1.0).** Tested on macOS with fake servers only. Windows and Linux are untested, and the real Claude and Codex endpoints have not been called by the author. On a Mac, Claude Code usually keeps its token in the Keychain, which this app does not read, so Claude usage will not show there.
+**Status: early (v0.1.0).** Developed on macOS and tested with fake servers. CI (build, tests, screenshots) passes on Windows, Linux and macOS. The release installers were installed and started in an automated smoke test on all three systems (Linux on x86_64 only); that test does not click the tray icon, and nobody has used the Windows or Linux builds by hand yet. The real Claude and Codex endpoints have not been called by the author. On a Mac, Claude Code usually keeps its token in the Keychain, which this app does not read, so Claude usage will not show there.
 
 This project is based on [CLI-Usage](https://github.com/nimaansari/CLI-Usage) by Nima Ansari (MIT). The Tauri, Rust and Preact code here is a separate implementation written from the Mac bar's behaviour and tests; see Credit below.
 
@@ -170,7 +170,7 @@ See `THIRD-PARTY-NOTICES.md` for the licences of the components this app uses (t
 
 ## Releasing
 
-Releases are built by `.github/workflows/release.yml` when a version tag is pushed. The builds are unsigned (see the release notes text in that file). The workflow has not been run on GitHub yet, so expect to fix small things on the first release.
+Releases are built by `.github/workflows/release.yml` when a version tag is pushed. The builds are unsigned (see the release notes text in that file). The release workflow builds the installers for all three systems on GitHub; expect small fixes on the first public release.
 
 1. Choose the new version, for example `0.2.0`, and change it in all three places so they match: `version` in `src-tauri/tauri.conf.json`, `version` in `src-tauri/Cargo.toml`, and `version` in `package.json`. Then run `cargo check` in `src-tauri` (and `npm install --package-lock-only`) so `Cargo.lock` and `package-lock.json` follow.
 2. Commit the change, then tag it: `git tag v0.2.0`. The tag must be `v` plus the exact version; the workflow stops with an error if it differs from `tauri.conf.json` or if the three versions disagree.
