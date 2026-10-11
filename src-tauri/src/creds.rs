@@ -155,7 +155,12 @@ impl Provider {
 
 /// Where the provider's config folder is. Order: USAGEBAR_<X>_DIR (tests and manual runs), the tool's own variable
 /// (CLAUDE_CONFIG_DIR, CODEX_HOME), then `~/.claude` / `~/.codex`.
-pub fn config_dir(p: Provider, env: &dyn Fn(&str) -> Option<String>, home: &str) -> PathBuf {
+/// None when no override is set and there is no home folder.
+pub fn config_dir(
+    p: Provider,
+    env: &dyn Fn(&str) -> Option<String>,
+    home: Option<&str>,
+) -> Option<PathBuf> {
     let (own, tool, sub) = match p {
         Provider::Claude => ("USAGEBAR_CLAUDE_DIR", "CLAUDE_CONFIG_DIR", ".claude"),
         Provider::Codex => ("USAGEBAR_CODEX_DIR", "CODEX_HOME", ".codex"),
@@ -163,11 +168,11 @@ pub fn config_dir(p: Provider, env: &dyn Fn(&str) -> Option<String>, home: &str)
     for name in [own, tool] {
         if let Some(v) = env(name) {
             if !v.trim().is_empty() {
-                return PathBuf::from(v);
+                return Some(PathBuf::from(v));
             }
         }
     }
-    Path::new(home).join(sub)
+    home.map(|h| Path::new(h).join(sub))
 }
 
 pub fn cred_file(p: Provider, dir: &Path) -> PathBuf {
@@ -324,18 +329,20 @@ pub fn parse_codex(text: &str) -> Result<CodexCreds, CredError> {
 }
 
 /// The home folder: the ONE place this is decided (the data folder, the config folders and the codex search all use it).
-/// Windows: USERPROFILE, then HOMEDRIVE + HOMEPATH, and HOME only when both are missing. Unix: HOME. Last resort ".".
-pub fn home_for(os: Os, env: &dyn Fn(&str) -> Option<String>) -> String {
+/// Windows: USERPROFILE, then HOMEDRIVE + HOMEPATH, and HOME only when both are missing. Unix: HOME.
+/// None when none is set: the caller must refuse, NEVER fall back to the current folder (credential files would be read from
+/// wherever the app was started, and the data folder would be created there).
+pub fn home_for(os: Os, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let get = |k: &str| env(k).filter(|v| !v.trim().is_empty());
     if os == Os::Windows {
         if let Some(p) = get("USERPROFILE") {
-            return p;
+            return Some(p);
         }
         if let (Some(d), Some(p)) = (get("HOMEDRIVE"), get("HOMEPATH")) {
-            return format!("{d}{p}");
+            return Some(format!("{d}{p}"));
         }
     }
-    get("HOME").unwrap_or_else(|| ".".into())
+    get("HOME")
 }
 
 #[cfg(test)]
@@ -353,32 +360,36 @@ mod tests {
     #[test]
     fn config_dir_order() {
         assert_eq!(
-            config_dir(Provider::Claude, &env(&[]), "/h"),
-            PathBuf::from("/h/.claude")
+            config_dir(Provider::Claude, &env(&[]), Some("/h")),
+            Some(PathBuf::from("/h/.claude"))
         );
         assert_eq!(
-            config_dir(Provider::Codex, &env(&[]), "/h"),
-            PathBuf::from("/h/.codex")
+            config_dir(Provider::Codex, &env(&[]), Some("/h")),
+            Some(PathBuf::from("/h/.codex"))
         );
         assert_eq!(
-            config_dir(Provider::Claude, &env(&[("CLAUDE_CONFIG_DIR", "/c")]), "/h"),
-            PathBuf::from("/c")
+            config_dir(
+                Provider::Claude,
+                &env(&[("CLAUDE_CONFIG_DIR", "/c")]),
+                Some("/h")
+            ),
+            Some(PathBuf::from("/c"))
         );
         assert_eq!(
             config_dir(
                 Provider::Claude,
                 &env(&[("CLAUDE_CONFIG_DIR", "/c"), ("USAGEBAR_CLAUDE_DIR", "/t")]),
-                "/h"
+                Some("/h")
             ),
-            PathBuf::from("/t")
+            Some(PathBuf::from("/t"))
         );
         assert_eq!(
             config_dir(
                 Provider::Codex,
                 &env(&[("CODEX_HOME", "/x"), ("USAGEBAR_CODEX_DIR", "  ")]),
-                "/h"
+                Some("/h")
             ),
-            PathBuf::from("/x")
+            Some(PathBuf::from("/x"))
         );
     }
 
@@ -398,31 +409,42 @@ mod tests {
             ("HOMEPATH", "\\h"),
             ("HOME", "/msys/home/a"),
         ];
-        assert_eq!(home_for(Os::Windows, &e(all.clone())), "C:\\Users\\a");
+        let h = |os, v| home_for(os, &v);
         assert_eq!(
-            home_for(
+            h(Os::Windows, e(all.clone())).as_deref(),
+            Some("C:\\Users\\a")
+        );
+        assert_eq!(
+            h(
                 Os::Windows,
-                &e(vec![
+                e(vec![
                     ("HOMEDRIVE", "D:"),
                     ("HOMEPATH", "\\h"),
                     ("HOME", "/m")
                 ])
-            ),
-            "D:\\h"
+            )
+            .as_deref(),
+            Some("D:\\h")
         );
-        assert_eq!(home_for(Os::Windows, &e(vec![("HOME", "/m")])), "/m");
         assert_eq!(
-            home_for(Os::Windows, &e(vec![("USERPROFILE", "  "), ("HOME", "/m")])),
-            "/m"
+            h(Os::Windows, e(vec![("HOME", "/m")])).as_deref(),
+            Some("/m")
         );
-        assert_eq!(home_for(Os::Windows, &e(vec![])), ".");
+        assert_eq!(
+            h(Os::Windows, e(vec![("USERPROFILE", "  "), ("HOME", "/m")])).as_deref(),
+            Some("/m")
+        );
+        // no home folder: None, never "." (the current folder)
+        assert_eq!(h(Os::Windows, e(vec![])), None);
+        assert_eq!(h(Os::Windows, e(vec![("HOME", "   ")])), None);
         for os in [Os::Linux, Os::Mac] {
             assert_eq!(
-                home_for(os, &e(all.clone())),
-                "/msys/home/a",
+                h(os, e(all.clone())).as_deref(),
+                Some("/msys/home/a"),
                 "Unix ignores USERPROFILE"
             );
-            assert_eq!(home_for(os, &e(vec![("USERPROFILE", "C:\\x")])), ".");
+            assert_eq!(h(os, e(vec![("USERPROFILE", "C:\\x")])), None);
+            assert_eq!(h(os, e(vec![])), None);
         }
     }
 

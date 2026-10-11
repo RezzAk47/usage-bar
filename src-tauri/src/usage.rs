@@ -59,12 +59,15 @@ impl FetchResult {
     }
 }
 
+const NO_HOME: &str = "no home folder found (HOME / USERPROFILE is not set)";
+
 /// Everything that can differ between a real run and a test, resolved once from the environment.
 pub struct Config {
     pub os: Os,
     pub test_mode: bool,
-    pub claude_dir: PathBuf,
-    pub codex_dir: PathBuf,
+    /// None when there is no home folder and no override: the provider then reports "unavailable".
+    pub claude_dir: Option<PathBuf>,
+    pub codex_dir: Option<PathBuf>,
     pub claude_url: String,
     pub codex_url: String,
     pub codex_bin: Option<PathBuf>,
@@ -89,6 +92,7 @@ impl Config {
     ) -> Config {
         let test_mode = env("USAGEBAR_TEST").as_deref() == Some("1");
         let home = creds::home_for(os, env);
+        let home = home.as_deref();
         let claude_base = test_mode
             .then(|| test_base(env, "USAGEBAR_API_BASE_CLAUDE"))
             .flatten()
@@ -102,13 +106,13 @@ impl Config {
                 .map(PathBuf::from)
                 .filter(|p| p.is_file())
         } else {
-            locate::find_codex(os, env, &home, settings.codex_path.as_deref())
+            home.and_then(|h| locate::find_codex(os, env, h, settings.codex_path.as_deref()))
         };
         Config {
             os,
             test_mode,
-            claude_dir: creds::config_dir(Provider::Claude, env, &home),
-            codex_dir: creds::config_dir(Provider::Codex, env, &home),
+            claude_dir: creds::config_dir(Provider::Claude, env, home),
+            codex_dir: creds::config_dir(Provider::Codex, env, home),
             claude_url: format!("{claude_base}{CLAUDE_PATH}"),
             codex_url: format!("{codex_base}{CODEX_PATH}"),
             codex_bin,
@@ -138,10 +142,13 @@ fn refused(p: Provider, what: &str, why: &str) -> FetchResult {
 
 fn fetch_claude(cfg: &Config, http: &dyn Http) -> FetchResult {
     let p = Provider::Claude;
-    if !cfg.claude_dir.is_dir() {
+    let Some(claude_dir) = cfg.claude_dir.as_deref() else {
+        return FetchResult::unavailable(p, NO_HOME);
+    };
+    if !claude_dir.is_dir() {
         return FetchResult::status(p, "not_installed");
     }
-    let text = match creds::read_cred_file(&creds::cred_file(p, &cfg.claude_dir)) {
+    let text = match creds::read_cred_file(&creds::cred_file(p, claude_dir)) {
         Ok(t) => t,
         Err(CredError::Missing) if cfg.os == Os::Mac => {
             return FetchResult::unavailable(
@@ -215,7 +222,10 @@ fn app_server(cfg: &Config) -> Option<Result<Value, appserver::AppServerError>> 
 
 fn fetch_codex(cfg: &Config, http: &dyn Http) -> FetchResult {
     let p = Provider::Codex;
-    if !cfg.codex_dir.is_dir() && cfg.codex_bin.is_none() {
+    let Some(codex_dir) = cfg.codex_dir.as_deref() else {
+        return FetchResult::unavailable(p, NO_HOME);
+    };
+    if !codex_dir.is_dir() && cfg.codex_bin.is_none() {
         return FetchResult::status(p, "not_installed");
     }
     let fallback = |first: Option<HttpError>| -> FetchResult {
@@ -235,7 +245,7 @@ fn fetch_codex(cfg: &Config, http: &dyn Http) -> FetchResult {
             },
         }
     };
-    let text = match creds::read_cred_file(&creds::cred_file(p, &cfg.codex_dir)) {
+    let text = match creds::read_cred_file(&creds::cred_file(p, codex_dir)) {
         Ok(t) => t,
         Err(CredError::Missing) | Err(CredError::Malformed) | Err(CredError::InvalidToken) => {
             return fallback(None)
@@ -308,8 +318,8 @@ mod tests {
         Config {
             os,
             test_mode: true,
-            claude_dir: claude.into(),
-            codex_dir: codex.into(),
+            claude_dir: Some(claude.into()),
+            codex_dir: Some(codex.into()),
             claude_url: "http://127.0.0.1:1/c".into(),
             codex_url: "http://127.0.0.1:1/x".into(),
             codex_bin: None,
@@ -550,5 +560,27 @@ mod tests {
             &RustSettings::default(),
         );
         assert_eq!(c.claude_url, "https://api.anthropic.com/api/oauth/usage");
+    }
+
+    #[test]
+    fn no_home_folder_means_unavailable_never_the_current_folder() {
+        // a cred file in the current folder must NOT be picked up when there is no home
+        let c = Config::from_env(Os::Linux, &|_: &str| None, &RustSettings::default());
+        assert_eq!(c.claude_dir, None);
+        assert_eq!(c.codex_dir, None);
+        assert_eq!(c.codex_bin, None);
+        for p in [Provider::Claude, Provider::Codex] {
+            let m = Mock::new(vec![]);
+            let r = fetch(p, &c, &m);
+            assert_eq!(r.status, "unavailable", "{p:?}");
+            assert!(r.reason.unwrap().contains("home folder"));
+        }
+        // an explicit override still works without a home
+        let c = Config::from_env(
+            Os::Linux,
+            &|k: &str| (k == "CLAUDE_CONFIG_DIR").then(|| "/c".to_string()),
+            &RustSettings::default(),
+        );
+        assert_eq!(c.claude_dir, Some(PathBuf::from("/c")));
     }
 }

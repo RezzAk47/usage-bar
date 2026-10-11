@@ -53,31 +53,45 @@ fn is_absolute(p: &str, os: Os) -> bool {
 /// 1. USAGEBAR_DATA_DIR (every test and manual run sets it)
 /// 2. macOS ~/Library/Application Support/UsageBar, Windows %APPDATA%\UsageBar,
 ///    Linux ${XDG_DATA_HOME:-~/.local/share}/UsageBar (an XDG_DATA_HOME that is not absolute is ignored).
-pub fn default_data_dir(os: Os, env: &dyn Fn(&str) -> Option<String>, home: &str) -> PathBuf {
+///
+/// Err when the folder would have to be built from a home folder that does not exist (never the current folder).
+pub fn default_data_dir(
+    os: Os,
+    env: &dyn Fn(&str) -> Option<String>,
+    home: Option<&str>,
+) -> Result<PathBuf, String> {
     if let Some(o) = env("USAGEBAR_DATA_DIR") {
         if !o.trim().is_empty() {
-            return PathBuf::from(o);
+            return Ok(PathBuf::from(o));
         }
     }
+    let no_home = || {
+        "no home folder found (HOME / USERPROFILE is not set), so the data folder cannot be chosen"
+            .to_string()
+    };
     let sep = if os == Os::Windows { '\\' } else { '/' };
-    let h = trim_end(home, sep);
+    let h = home.map(|h| trim_end(h, sep));
     let s = match os {
-        Os::Mac => format!("{h}/Library/Application Support/UsageBar"),
+        Os::Mac => format!(
+            "{}/Library/Application Support/UsageBar",
+            h.ok_or_else(no_home)?
+        ),
         Os::Windows => {
-            let appdata = env("APPDATA")
-                .filter(|a| !a.trim().is_empty())
-                .unwrap_or_else(|| format!("{h}\\AppData\\Roaming"));
+            let appdata = match env("APPDATA").filter(|a| !a.trim().is_empty()) {
+                Some(a) => a,
+                None => format!("{}\\AppData\\Roaming", h.ok_or_else(no_home)?),
+            };
             format!("{}\\UsageBar", trim_end(&appdata, '\\'))
         }
         Os::Linux => {
             let base = match env("XDG_DATA_HOME") {
                 Some(x) if is_absolute(&x, Os::Linux) => trim_end(&x, '/').to_string(),
-                _ => format!("{h}/.local/share"),
+                _ => format!("{}/.local/share", h.ok_or_else(no_home)?),
             };
             format!("{base}/UsageBar")
         }
     };
-    PathBuf::from(s)
+    Ok(PathBuf::from(s))
 }
 
 #[cfg(test)]
@@ -96,8 +110,10 @@ mod tests {
     #[test]
     fn mac() {
         assert_eq!(
-            default_data_dir(Os::Mac, &env(&[]), "/Users/ann"),
-            PathBuf::from("/Users/ann/Library/Application Support/UsageBar")
+            default_data_dir(Os::Mac, &env(&[]), Some("/Users/ann")),
+            Ok(PathBuf::from(
+                "/Users/ann/Library/Application Support/UsageBar"
+            ))
         );
     }
 
@@ -105,45 +121,49 @@ mod tests {
     fn windows_uses_appdata_then_profile() {
         let e = env(&[("APPDATA", "C:\\Users\\Ann\\AppData\\Roaming")]);
         assert_eq!(
-            default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"),
-            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+            default_data_dir(Os::Windows, &e, Some("C:\\Users\\Ann")),
+            Ok(PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"))
         );
         let e = env(&[("APPDATA", "C:\\Users\\Ann\\AppData\\Roaming\\")]);
         assert_eq!(
-            default_data_dir(Os::Windows, &e, "C:\\Users\\Ann"),
-            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+            default_data_dir(Os::Windows, &e, Some("C:\\Users\\Ann")),
+            Ok(PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"))
         );
         assert_eq!(
-            default_data_dir(Os::Windows, &env(&[]), "C:\\Users\\Ann"),
-            PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar")
+            default_data_dir(Os::Windows, &env(&[]), Some("C:\\Users\\Ann")),
+            Ok(PathBuf::from("C:\\Users\\Ann\\AppData\\Roaming\\UsageBar"))
         );
     }
 
     #[test]
     fn linux_uses_xdg_when_absolute() {
         assert_eq!(
-            default_data_dir(Os::Linux, &env(&[]), "/home/ann"),
-            PathBuf::from("/home/ann/.local/share/UsageBar")
+            default_data_dir(Os::Linux, &env(&[]), Some("/home/ann")),
+            Ok(PathBuf::from("/home/ann/.local/share/UsageBar"))
         );
         assert_eq!(
             default_data_dir(
                 Os::Linux,
                 &env(&[("XDG_DATA_HOME", "/data/xdg")]),
-                "/home/ann"
+                Some("/home/ann")
             ),
-            PathBuf::from("/data/xdg/UsageBar")
+            Ok(PathBuf::from("/data/xdg/UsageBar"))
         );
         assert_eq!(
             default_data_dir(
                 Os::Linux,
                 &env(&[("XDG_DATA_HOME", "relative/dir")]),
-                "/home/ann"
+                Some("/home/ann")
             ),
-            PathBuf::from("/home/ann/.local/share/UsageBar")
+            Ok(PathBuf::from("/home/ann/.local/share/UsageBar"))
         );
         assert_eq!(
-            default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "")]), "/home/ann/"),
-            PathBuf::from("/home/ann/.local/share/UsageBar")
+            default_data_dir(
+                Os::Linux,
+                &env(&[("XDG_DATA_HOME", "")]),
+                Some("/home/ann/")
+            ),
+            Ok(PathBuf::from("/home/ann/.local/share/UsageBar"))
         );
     }
 
@@ -151,13 +171,36 @@ mod tests {
     fn override_wins_everywhere() {
         for os in [Os::Mac, Os::Windows, Os::Linux] {
             assert_eq!(
-                default_data_dir(os, &env(&[("USAGEBAR_DATA_DIR", "/tmp/x")]), "/h"),
-                PathBuf::from("/tmp/x")
+                default_data_dir(os, &env(&[("USAGEBAR_DATA_DIR", "/tmp/x")]), Some("/h")),
+                Ok(PathBuf::from("/tmp/x"))
             );
         }
         assert_eq!(
-            default_data_dir(Os::Linux, &env(&[("USAGEBAR_DATA_DIR", "  ")]), "/h"),
-            PathBuf::from("/h/.local/share/UsageBar")
+            default_data_dir(Os::Linux, &env(&[("USAGEBAR_DATA_DIR", "  ")]), Some("/h")),
+            Ok(PathBuf::from("/h/.local/share/UsageBar"))
+        );
+    }
+
+    #[test]
+    fn no_home_is_an_error_not_the_current_folder() {
+        for os in [Os::Mac, Os::Linux] {
+            let r = default_data_dir(os, &env(&[]), None);
+            assert!(r.is_err(), "{os:?}: {r:?}");
+        }
+        // Windows without APPDATA and without a home
+        assert!(default_data_dir(Os::Windows, &env(&[]), None).is_err());
+        // an explicit location still works without a home
+        assert_eq!(
+            default_data_dir(Os::Linux, &env(&[("XDG_DATA_HOME", "/data/x")]), None),
+            Ok(PathBuf::from("/data/x/UsageBar"))
+        );
+        assert_eq!(
+            default_data_dir(Os::Windows, &env(&[("APPDATA", "C:\\A")]), None),
+            Ok(PathBuf::from("C:\\A\\UsageBar"))
+        );
+        assert_eq!(
+            default_data_dir(Os::Mac, &env(&[("USAGEBAR_DATA_DIR", "/t")]), None),
+            Ok(PathBuf::from("/t"))
         );
     }
 }

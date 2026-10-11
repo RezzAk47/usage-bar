@@ -61,8 +61,24 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn home_dir() -> String {
+fn home_dir() -> Option<String> {
     creds::home_for(Os::current(), &env_var)
+}
+
+/// Tell the person why the app cannot start (stderr always; a dialog on macOS where a menu bar app has no terminal).
+fn refuse_to_start(why: &str) -> ! {
+    eprintln!("usage-bar: cannot start: {why}");
+    #[cfg(target_os = "macos")]
+    {
+        let msg = format!("Usage Bar cannot start: {why}.").replace(['\\', '"'], "");
+        let _ = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                &format!("display alert \"Usage Bar\" message \"{msg}\""),
+            ])
+            .status();
+    }
+    std::process::exit(1)
 }
 
 fn test_mode() -> bool {
@@ -423,7 +439,10 @@ pub fn run() {
         }
     }));
     let os = Os::current();
-    let data_dir = datadir::default_data_dir(os, &env_var, &home_dir());
+    let data_dir = match datadir::default_data_dir(os, &env_var, home_dir().as_deref()) {
+        Ok(d) => d,
+        Err(why) => refuse_to_start(&why),
+    };
 
     let mut builder = tauri::Builder::default();
     #[cfg(desktop)]
