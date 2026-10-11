@@ -17,7 +17,7 @@ Screenshots use made-up sample numbers (light, then dark with the 7-day history)
 >
 > Usage Bar is an independent project. It is not affiliated with, endorsed by or sponsored by Anthropic or OpenAI. Claude, Claude Code, Codex, ChatGPT and OpenAI are trademarks of their respective owners.
 
-**Status: early (v0.1.0).** Developed on macOS and tested with fake servers. CI (build, tests, screenshots) passes on Windows, Linux and macOS. The release installers were installed and started in an automated smoke test on all three systems (Linux on x86_64 only); that test does not click the tray icon, and nobody has used the Windows or Linux builds by hand yet. The real Claude and Codex endpoints have not been called by the author. On a Mac, Claude Code usually keeps its token in the Keychain, which this app does not read, so Claude usage will not show there.
+**Status: early (v0.1.1).** Developed on macOS and tested with fake servers. CI (build, tests, screenshots) passes on Windows, Linux and macOS. The release installers were installed and started in an automated smoke test on all three systems (Linux on x86_64 only); that test does not click the tray icon, and nobody has used the Windows or Linux builds by hand yet. The real Claude and Codex endpoints have not been called by the author. On a Mac, Claude Code usually keeps its token in the Keychain, which this app does not read, so Claude usage will not show there.
 
 This project is based on [CLI-Usage](https://github.com/nimaansari/CLI-Usage) by Nima Ansari (MIT). The Tauri, Rust and Preact code here is a separate implementation written from the Mac bar's behaviour and tests; see Credit below.
 
