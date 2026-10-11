@@ -359,6 +359,14 @@ fn place_and_show(app: &AppHandle, win: &WebviewWindow, icon: Option<Rect>) {
     let _ = app.emit("popup-shown", ());
 }
 
+/// How long after the popup hid itself on blur a tray click is ignored. The click that caused the blur hides the popup on
+/// mouse-DOWN and the toggle arrives on mouse-UP, so a click held longer than this would re-open it. 400 ms covers a slow click.
+const BLUR_SUPPRESS_MS: u64 = 400;
+
+fn blur_suppresses(since_blur: Duration) -> bool {
+    since_blur < Duration::from_millis(BLUR_SUPPRESS_MS)
+}
+
 fn toggle_popup(app: &AppHandle, icon: Option<Rect>) {
     let Some(win) = app.get_webview_window("main") else {
         return;
@@ -369,7 +377,7 @@ fn toggle_popup(app: &AppHandle, icon: Option<Rect>) {
         return;
     }
     if let Some(t) = *state.blurred_at.lock().unwrap() {
-        if t.elapsed() < Duration::from_millis(250) {
+        if blur_suppresses(t.elapsed()) {
             return; // this click is the one that made the popup lose focus and hide
         }
     }
@@ -647,5 +655,23 @@ mod shell_tests {
             120
         );
         assert_eq!(notification_text("  a   b  ", 10), "a b");
+    }
+}
+
+#[cfg(test)]
+mod blur_tests {
+    use super::*;
+
+    #[test]
+    fn a_click_held_300_ms_after_the_blur_is_still_the_same_click() {
+        assert!(blur_suppresses(Duration::from_millis(0)));
+        assert!(blur_suppresses(Duration::from_millis(300)));
+        assert!(blur_suppresses(Duration::from_millis(399)));
+    }
+
+    #[test]
+    fn a_later_click_opens_the_popup() {
+        assert!(!blur_suppresses(Duration::from_millis(400)));
+        assert!(!blur_suppresses(Duration::from_secs(5)));
     }
 }

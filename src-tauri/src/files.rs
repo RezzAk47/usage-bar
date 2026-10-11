@@ -284,15 +284,20 @@ impl Lock {
         // built on the OS string, so a folder name that is not valid UTF-8 still locks the right file
         let mut lock_path = target.as_os_str().to_os_string();
         lock_path.push(".lock");
-        let Ok(f) = fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(PathBuf::from(lock_path))
-        else {
+        let mut o = fs::OpenOptions::new();
+        o.create(true).read(true).write(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.custom_flags(libc::O_NONBLOCK); // a FIFO planted as the lock file must not block the open
+        }
+        let Ok(f) = o.open(PathBuf::from(lock_path)) else {
             return Ok(Lock(None));
         };
+        // a FIFO, device or folder is not a lock file: no lock (the compare-and-swap still protects the write)
+        if !f.metadata().map(|m| m.is_file()).unwrap_or(false) {
+            return Ok(Lock(None));
+        }
         let t0 = std::time::Instant::now();
         loop {
             match f.try_lock() {
@@ -906,6 +911,26 @@ mod tests {
         write(d.path(), "settings.json", "aaaa", None).unwrap();
         let b = stat(d.path(), "settings.json").unwrap().unwrap();
         assert_ne!(a, b);
+    }
+
+    /// A FIFO planted as `<file>.lock` used to block the lock open forever (a read+write open of a FIFO without O_NONBLOCK waits
+    /// for the other end). Now it counts as "no lock" and the write goes ahead.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_as_the_lock_file_does_not_hang_the_write() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "settings.json", "old", None).unwrap();
+        let lock = d.path().join("settings.json.lock");
+        let _ = fs::remove_file(&lock);
+        let c = std::ffi::CString::new(lock.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = d.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ =
+                tx.send(Lock::take(&dir.join("settings.json"), Duration::from_millis(200)).is_ok());
+        });
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 
     /// Another program holds `<file>.lock` for longer than the wait: the write is refused with a clear error. It used to go

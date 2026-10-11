@@ -340,10 +340,14 @@ mod tests {
 
 /// The size to place the popup with. `outer_size()` read straight after `set_size` can still be the OLD (tiny, hidden) window
 /// size on Linux/GTK, which put the popup at x = screen width - 42, mostly off screen. A window can be larger than the size we
-/// asked for (a title bar or border) but never smaller, so take the larger of the two per axis.
+/// asked for (a title bar or border) but never smaller. A STALE outer size can also be much LARGER (an old, bigger window), so
+/// per axis trust `outer` only when requested <= outer <= requested + OUTER_SLACK (decorations), else use the requested size.
+const OUTER_SLACK: i32 = 64;
+
 pub fn settled_size(outer: Option<(i32, i32)>, requested: (i32, i32)) -> (i32, i32) {
+    let axis = |o: i32, r: i32| if o >= r && o <= r + OUTER_SLACK { o } else { r };
     match outer {
-        Some((w, h)) => (w.max(requested.0), h.max(requested.1)),
+        Some((w, h)) => (axis(w, requested.0), axis(h, requested.1)),
         None => requested,
     }
 }
@@ -360,6 +364,16 @@ mod settled_size_tests {
     #[test]
     fn a_window_with_a_border_keeps_its_larger_outer_size() {
         assert_eq!(settled_size(Some((436, 679)), (420, 640)), (436, 679));
+    }
+
+    #[test]
+    fn a_stale_larger_outer_size_never_wins_over_the_requested_size() {
+        assert_eq!(settled_size(Some((1200, 900)), (420, 640)), (420, 640));
+        // per axis: a sane width is kept while a stale tall height is not
+        assert_eq!(settled_size(Some((436, 2000)), (420, 640)), (436, 640));
+        // the slack boundary
+        assert_eq!(settled_size(Some((484, 704)), (420, 640)), (484, 704));
+        assert_eq!(settled_size(Some((485, 705)), (420, 640)), (420, 640));
     }
 
     #[test]

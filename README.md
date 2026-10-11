@@ -68,7 +68,7 @@ If an endpoint changes, the page shows `usage unavailable (reason)` and nothing 
   following links and checked again after opening. The token itself must be visible ASCII (no spaces, control or non-ASCII
   characters), 8 to 4096 characters, otherwise the app says "credential file has an invalid token". `expiresAt` is read as seconds (below 1e11),
   milliseconds (below 1e14), a numeric string or an ISO time; anything else means "no expiry information" and the request decides (a 401 means sign in again).
-- The home folder is decided in one place: Windows `USERPROFILE`, then `HOMEDRIVE`+`HOMEPATH`, `HOME` only if both are missing; Unix `HOME`.
+- The home folder is decided in one place: Windows `USERPROFILE`, then `HOMEDRIVE`+`HOMEPATH`, `HOME` only if both are missing; Unix `HOME`. With no home folder the app never falls back to the current folder: Claude and Codex show "unavailable", and if the data folder cannot be chosen (no `USAGEBAR_DATA_DIR`, `APPDATA` or `XDG_DATA_HOME` either) the app stops with a message.
 - Tokens live only in Rust (`creds.rs`, `http.rs`, `usage.rs`) in a wrapper that cannot be printed. The page gets a status and
   a **whitelisted projection** of the provider's response, never a token: only numbers (used percent, window length, reset time),
   bounded reset strings, a plan name and window names made of letters, digits, space, `_` and `-` (at most 40 characters) survive;
