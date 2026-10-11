@@ -131,7 +131,7 @@ IPC payload), Playwright screenshots and the browser smoke test in Chrome.
 
 **Not verified:** Windows and Linux (including: `taskkill` tree kill, the `.cmd` shim path, Windows credential and home precedence, Linux AppIndicator) (never run: tray behaviour, autostart, notifications, credential locations, window placement
 are untested there); the real Claude and Codex endpoints (never called); the Linux AppIndicator tray; Windows `codex.exe`
-lookup; macOS Keychain (not supported). The CI file has never been executed.
+lookup; macOS Keychain (not supported). CI passes on Windows, Linux and macOS, and the installer smoke test passes on all three, but nothing was used by hand.
 
 ## Differences from the Mac bar
 

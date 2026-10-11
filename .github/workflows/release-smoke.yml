@@ -1,7 +1,7 @@
 # Release smoke test: builds the REAL release bundles (the same commands as release.yml) and runs the INSTALLED app on real
 # Linux (x86_64, .deb and .AppImage), Windows (NSIS installer) and macOS (.dmg) with synthetic data only.
 # Run by hand: gh workflow run release-smoke.yml --ref <branch>. Nothing is published; the screenshots and logs are artifacts.
-# NOT YET EXECUTED: GitHub Actions has never run this file. Expect small fixes on the first real run.
+# Run on GitHub on 2026-10-10 (workflow_dispatch) and passing on all three systems; the tray icon is never clicked.
 # Pins: the same full commit SHAs as release.yml; no other third-party actions; everything else is plain shell / PowerShell.
 name: release-smoke
 
