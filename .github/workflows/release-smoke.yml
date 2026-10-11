@@ -433,8 +433,8 @@ jobs:
           # 4. second launch = single-instance toggle: a visible popup window should appear
           Start-Process -FilePath $exe.FullName | Out-Null
           $popup = $null
-          for ($i = 0; $i -lt 30 -and -not $popup; $i++) {
-            Start-Sleep -Milliseconds 500
+          for ($i = 0; $i -lt 150 -and -not $popup; $i++) {  # 100 ms beat: a popup that hides again on focus loss can be visible for under half a second
+            Start-Sleep -Milliseconds 100
             $procs = @(Get-Process -Name $procName -ErrorAction SilentlyContinue)
             $pids = [uint32[]]($procs | ForEach-Object { $_.Id })
             $w = @(if ($pids.Count) { [WinProbe]::ForPids($pids) })
