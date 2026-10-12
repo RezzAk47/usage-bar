@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your Claude Code and Codex limits is used.",
+  "description": "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your AI coding tool usage limits is left.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -1,5 +1,5 @@
 // The CI workflow cannot be run here, so its hardening is checked as text: timeouts, one run per branch, read-only token,
-// and a clearly marked TODO while the actions are still pinned to tags instead of commit SHAs.
+// and every action pinned to a full commit SHA.
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
