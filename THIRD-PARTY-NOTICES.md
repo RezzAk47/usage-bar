@@ -1,6 +1,6 @@
 # Third-party notices for Usage Bar
 
-Usage Bar is MIT licensed (see `LICENSE`). It is built from the open-source components below. Their licences require that
+Usage Bar is licensed under the PolyForm Noncommercial License 1.0.0 (see `LICENSE`). It is built from the open-source components below. Their licences require that
 their copyright and licence notices travel with copies of the software, so **ship this file (or a copy of it) with every
 installer and release**, for example attach it to the GitHub Release and place it next to the app.
 

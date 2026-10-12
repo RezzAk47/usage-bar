@@ -2,7 +2,7 @@
   "name": "usage-bar",
   "version": "0.1.1",
   "private": true,
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "description": "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your AI coding tool usage limits is left.",
   "scripts": {

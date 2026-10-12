@@ -5,7 +5,7 @@ description = "Usage Bar for Windows, Linux and macOS: a tray app showing how mu
 edition = "2021"
 rust-version = "1.90"
 publish = false
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
 name = "usage_bar_lib"
