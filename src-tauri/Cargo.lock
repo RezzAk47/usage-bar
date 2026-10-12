@@ -4358,7 +4358,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "usage-bar-cross"
+name = "usage-bar"
 version = "0.1.1"
 dependencies = [
  "libc",

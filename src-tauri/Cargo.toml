@@ -1,5 +1,5 @@
 [package]
-name = "usage-bar-cross"
+name = "usage-bar"
 version = "0.1.1"
 description = "Usage Bar for Windows, Linux and macOS: a tray app showing how much of your AI coding tool usage limits is left."
 edition = "2021"

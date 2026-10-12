@@ -12,7 +12,7 @@
     "test": "vitest run",
     "shots": "node scripts/screenshots.mjs",
     "ui:smoke": "node scripts/ui-smoke.mjs",
-    "token-leak": "node scripts/real-run.mjs src-tauri/target/debug/usage-bar-cross 10",
+    "token-leak": "node scripts/real-run.mjs src-tauri/target/debug/usage-bar 10",
     "log-guard": "node scripts/log-guard.mjs",
     "tauri": "tauri"
   },

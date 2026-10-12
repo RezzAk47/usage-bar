@@ -135,7 +135,7 @@ impl UreqHttp {
             .https_only(!test_mode)
             .http_status_as_error(false)
             .proxy(proxy)
-            .user_agent("usage-bar-cross/0.1")
+            .user_agent("usage-bar/0.1")
             .build()
             .into();
         UreqHttp { agent, test_mode }

@@ -226,7 +226,7 @@ pub fn rate_limits(
         }));
         let _ = send(
             &mut stdin,
-            &json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"usage-bar-cross","title":"Usage Bar","version":env!("CARGO_PKG_VERSION")}}}),
+            &json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"usage-bar","title":"Usage Bar","version":env!("CARGO_PKG_VERSION")}}}),
         );
         let end = Instant::now() + deadline;
         let (mut buf, mut total, mut sent_second) = (Vec::new(), 0usize, false);

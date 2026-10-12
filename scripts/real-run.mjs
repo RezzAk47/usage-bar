@@ -1,5 +1,5 @@
 // A short REAL run of the built app against FAKE credentials and a FAKE local server, then a search for the fake tokens.
-// Usage: node scripts/real-run.mjs [path-to-binary] [seconds]     (default binary: src-tauri/target/debug/usage-bar-cross)
+// Usage: node scripts/real-run.mjs [path-to-binary] [seconds]     (default binary: src-tauri/target/debug/usage-bar)
 // Nothing real is read: the credential files are made here, the "providers" are a local server on 127.0.0.1, HOME points at a
 // temp folder. Asserts: tray created, both fetches made with the right fake tokens, files written, ZERO hits for a token in
 // the data folder, the fake HOME, stdout/stderr (which includes every IPC payload the app logs in test mode).
@@ -13,7 +13,7 @@ if (process.platform !== 'darwin' && !process.env.USAGEBAR_FORCE_REAL_RUN) {
   console.log(`real-run: skipped on ${process.platform} (CI runs it on macOS only; set USAGEBAR_FORCE_REAL_RUN=1 to try elsewhere: it uses SIGTERM and ~/Library paths)`);
   process.exit(0);
 }
-const bin = process.argv[2] ?? 'src-tauri/target/debug/usage-bar-cross';
+const bin = process.argv[2] ?? 'src-tauri/target/debug/usage-bar';
 const seconds = Number(process.argv[3] ?? 10);
 const T = fs.mkdtempSync(path.join(os.tmpdir(), 'usagebar-real-'));
 const [data, home, creds, claudeDir, codexDir] = ['data', 'home', 'creds', 'creds/claude', 'creds/codex'].map((d) => { const p = path.join(T, d); fs.mkdirSync(p, { recursive: true }); return p; });
