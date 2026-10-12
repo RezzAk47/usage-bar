@@ -1,6 +1,6 @@
 # Usage Bar
 
-[![CI](https://github.com/RezzAk47/usage-bar-cross/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RezzAk47/usage-bar-cross/actions/workflows/ci.yml)
+[![CI](https://github.com/RezzAk47/usage-bar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RezzAk47/usage-bar/actions/workflows/ci.yml)
 ![Platforms: Windows, Linux, macOS](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-informational)
 ![Version 0.1.1](https://img.shields.io/badge/version-0.1.1-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -17,8 +17,6 @@ tools as rings, warns you before you run out, counts down to the next reset and 
 
 <sub>Screenshots use made-up sample numbers.</sub>
 
-Supported tools: Claude Code and Codex CLI.
-
 ## Features
 
 - A ring and `N% left` for every limit, with an OK / Low / Critical chip and the time until it resets.
@@ -30,7 +28,7 @@ Supported tools: Claude Code and Codex CLI.
 
 ## Download
 
-Installers will be on the [Releases](https://github.com/RezzAk47/usage-bar-cross/releases) page (coming soon). Until then,
+Installers will be on the [Releases](https://github.com/RezzAk47/usage-bar/releases) page (coming soon). Until then,
 [build from source](#build-from-source).
 
 The builds are not code-signed, so Windows SmartScreen and macOS Gatekeeper will warn the first time you open the app.
@@ -46,15 +44,15 @@ The builds are not code-signed, so Windows SmartScreen and macOS Gatekeeper will
 | Text next to the tray icon | Tooltip only | Tooltip only | Yes |
 | Open the popup | Click the tray icon | Tray menu, "Show Usage Bar" | Click the menu-bar icon |
 
-On a Mac, the token in `~/.claude` is usually kept in the Keychain, which this app does not read, so those limits will not
-show there. See [docs/DETAILS.md](docs/DETAILS.md#credentials-and-safety).
+On a Mac, one of the supported tools usually keeps its sign-in token in the Keychain, which this app does not read, so that
+tool's limits will not show there. See [docs/DETAILS.md](docs/DETAILS.md#credentials-and-safety).
 
 ## Privacy
 
 | What | Details |
 |---|---|
-| Reads | The sign-in token files your AI coding tools already keep: `~/.claude/.credentials.json` and `~/.codex/auth.json`. Read-only: never written, copied or logged. |
-| Sends | Each token only to the service that issued it, over HTTPS, to ask how much of your limit is used: `api.anthropic.com` and `chatgpt.com`. No other host is allowed and redirects are refused. |
+| Reads | The sign-in token files that supported AI coding tools already keep in hidden folders in your home directory. Read-only: never written, copied or logged. |
+| Sends | Each token only to the usage endpoint of the AI coding tool that issued it, over HTTPS, to ask how much of your limit is used. It contacts only the usage endpoints of the AI coding tools you are signed in to, and nothing else: two fixed hosts, no other host is allowed and redirects are refused. For one tool, if its token is missing or the request fails, the app asks that tool's own command-line program on your computer instead. |
 | Stores | `settings.json`, `usage-alerts.json`, `usage-history.json` and `usage-backoff.json` in the app's data folder on your computer. |
 | Never | No analytics, no telemetry, no account, nothing sent to the author. The app's web view has no network access at all. |
 
@@ -69,8 +67,8 @@ Needs Node 24+, Rust 1.90 or newer, and the [Tauri 2 prerequisites](https://v2.t
 system (on Linux: WebKitGTK 4.1 and an AppIndicator library, see `.github/workflows/ci.yml`).
 
 ```sh
-git clone https://github.com/RezzAk47/usage-bar-cross.git
-cd usage-bar-cross
+git clone https://github.com/RezzAk47/usage-bar.git
+cd usage-bar
 npm ci --ignore-scripts
 npm run tauri build          # installer for this OS, in src-tauri/target/release/bundle
 npm run tauri dev            # or run it in development mode
