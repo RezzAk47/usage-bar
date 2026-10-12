@@ -437,3 +437,9 @@ Notes:
 | zvariant | 5.15.0 | MIT |
 | zvariant_derive | 5.15.0 | MIT |
 | zvariant_utils | 4.2.0 | MIT |
+
+## Trademarks
+
+Claude and Claude Code are trademarks of Anthropic. Codex, ChatGPT and OpenAI are trademarks of OpenAI. Apple and macOS are
+trademarks of Apple Inc. Windows is a trademark of Microsoft. These names appear only to say which tools and systems this app
+works with. This project is not affiliated with, endorsed by or sponsored by any of them, and it contains none of their logos.
