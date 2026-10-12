@@ -6,12 +6,12 @@ credentials are handled, what was tested, and how the app differs from the Mac u
 ## Disclaimer
 
 The two usage endpoints (`/api/oauth/usage` and `/backend-api/wham/usage`) are **undocumented and unofficial**. They can
-change or stop working at any time. Using CLI tokens with an unofficial endpoint may be outside what Anthropic's or OpenAI's
-terms allow. You use this app at your own risk, and the author is not responsible for any action a provider takes on your
+change or stop working at any time. Using CLI tokens with an unofficial endpoint may be outside what the providers' terms
+allow. You use this app at your own risk, and the author is not responsible for any action a provider takes on your
 account. If in doubt, do not use it.
 
-Usage Bar is an independent project. It is not affiliated with, endorsed by or sponsored by Anthropic or OpenAI. Claude,
-Claude Code, Codex, ChatGPT and OpenAI are trademarks of their respective owners (see `THIRD-PARTY-NOTICES.md`).
+Usage Bar is an independent project. It is not affiliated with, endorsed by or sponsored by the makers of the AI coding tools
+it works with. Product names are trademarks of their respective owners (see `THIRD-PARTY-NOTICES.md`).
 
 ## Features in detail
 
@@ -32,33 +32,34 @@ Claude Code, Codex, ChatGPT and OpenAI are trademarks of their respective owners
 
 ## How the usage numbers are obtained
 
-Neither provider documents a public usage API for subscription limits. This app uses the same sign-in tokens that the
-Claude Code and Codex command-line tools store on your computer, and asks two endpoints that those tools' accounts are
+Neither provider documents a public usage API for subscription limits. This app uses the same sign-in tokens that the two
+supported AI coding command-line tools store on your computer, and asks two endpoints that those tools' accounts are
 accepted by today. **These endpoints are known from public behaviour (community tools and the CLIs' own traffic), not from
 official documentation, and they were not tested against the real services while building this app** (see "What was verified"
 below). They can change or stop working without notice.
 
 | Provider | Source | Certainty |
 | --- | --- | --- |
-| Claude | `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <Claude Code OAuth token>` and `anthropic-beta: oauth-2025-04-20`. Response: windows such as `five_hour`, `seven_day`, `seven_day_opus`, each `{utilization: percent used, resets_at}`. | Medium. Endpoint and header are widely used by third-party tools; field names match the response shapes in the Mac bar's tests. Not officially documented. |
-| Codex | `GET https://chatgpt.com/backend-api/wham/usage` with `Authorization: Bearer <Codex ChatGPT token>` and `ChatGPT-Account-Id`. Response: `rate_limit.primary_window` / `secondary_window` (`used_percent`, `limit_window_seconds`, `reset_at`), optional `additional_rate_limits`. | Medium to low. Same status. |
-| Codex fallback | Runs `codex app-server` (fixed arguments, no shell, killed after 10 s) and calls `account/rateLimits/read`. Reply shape `{rateLimits: {planType, primary: {usedPercent, resetsAt}, secondary}}` is the one in the Mac bar's tests. | Medium for the reply shape, low for the exact request names (initialize / initialized / account/rateLimits/read). |
+| First tool | `GET /api/oauth/usage` on that tool's API host, with `Authorization: Bearer <the tool's OAuth token>` and a fixed beta header. Response: windows such as `five_hour` and `seven_day`, each `{utilization: percent used, resets_at}`. | Medium. Endpoint and header are widely used by third-party tools; field names match the response shapes in the Mac bar's tests. Not officially documented. |
+| Second tool | `GET /backend-api/wham/usage` on that tool's web host, with `Authorization: Bearer <the tool's token>` and an account-id header. Response: `rate_limit.primary_window` / `secondary_window` (`used_percent`, `limit_window_seconds`, `reset_at`), optional `additional_rate_limits`. | Medium to low. Same status. |
+| Second tool, fallback | Runs that tool's own command-line program in `app-server` mode (fixed arguments, no shell, killed after 10 s) and calls `account/rateLimits/read`. Reply shape `{rateLimits: {planType, primary: {usedPercent, resetsAt}, secondary}}` is the one in the Mac bar's tests. | Medium for the reply shape, low for the exact request names (initialize / initialized / account/rateLimits/read). |
 
 Because the shapes are uncertain, parsing is deliberately tolerant (strings, NaN, booleans, negatives, over 100, missing
 fields, epoch seconds or milliseconds or ISO times with any number of fraction digits). A response with no readable limit is
 shown as `usage unavailable (empty response)` and the last good numbers are kept. All of it is tested with mocks only. The two
-URLs are constants in `src-tauri/src/usage.rs`. They are configurable **only for tests**: `USAGEBAR_API_BASE_CLAUDE` /
-`USAGEBAR_API_BASE_CODEX` (loopback http only) and `USAGEBAR_CODEX_BIN` work only when `USAGEBAR_TEST=1`; in a normal run the
-hosts are fixed.
+URLs (with the two hosts) are constants in `src-tauri/src/usage.rs`. They are configurable **only for tests**: the
+`USAGEBAR_API_BASE_*` overrides (loopback http only) and the program-path override work only when `USAGEBAR_TEST=1`; in a
+normal run the hosts are fixed.
 
 If an endpoint changes, the page shows `usage unavailable (reason)` and nothing else breaks.
 
 ## Credentials and safety
 
-- The app reads the credential files **read-only** and never refreshes or writes tokens. Claude Code: `~/.claude/.credentials.json`
-  (Windows `%USERPROFILE%\.claude\.credentials.json`). Codex: `~/.codex/auth.json`. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are honoured.
-  A token that is expired (or refused with 401) shows "Sign in again in Claude Code / Codex".
-- **macOS Keychain is out of scope.** Claude Code on a Mac keeps its token in the Keychain; this build does not read it. On a
+- The app reads the credential files **read-only** and never refreshes or writes tokens. Each supported tool keeps one in its
+  hidden folder in your home directory (on Windows, under `%USERPROFILE%`); the tools' own folder-override variables are
+  honoured. The exact file names are in `src-tauri/src/creds.rs`. A token that is expired (or refused with 401) shows a
+  message asking you to sign in again in that tool.
+- **macOS Keychain is out of scope.** One of the supported tools keeps its token in the Keychain on a Mac; this build does not read it. On a
   Mac it only works if the credentials file exists. Mac users should keep the native Python usage bar.
 - A credential file is used only if it is a regular file (a link is refused), owned by you, at most 64 KB, opened without
   following links and checked again after opening. The token itself must be visible ASCII (no spaces, control or non-ASCII
@@ -92,11 +93,11 @@ If an endpoint changes, the page shows `usage unavailable (reason)` and nothing 
   ("is a link: not followed") for reading, stat and writing, as is a fifo or any non-regular file; the data folder itself may be
   a link you made. Reads happen off the main thread with a 5 s limit and open the file with `O_NOFOLLOW | O_NONBLOCK`, so a
   planted fifo cannot freeze the tray.
-- **codex lookup.** The Codex fallback needs the `codex` program. A login item has a short PATH, so besides PATH the app looks
+- **Program lookup.** The fallback needs the second tool's command-line program. A login item has a short PATH, so besides PATH the app looks
   in `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.volta/bin` and
   the 5 newest `~/.nvm/versions/node/*/bin` (Windows: `%APPDATA%\npm`, `%LOCALAPPDATA%\Programs`, `~\.bun\bin`, scoop shims),
-  never the current directory, and Settings has "Path to codex". A candidate must be an absolute path to a regular executable
-  (a link to one is fine) owned by you or root. The child gets only PATH, the home folder, `CODEX_HOME` and (Windows)
+  never the current directory, and Settings has a field for the program's path. A candidate must be an absolute path to a regular executable
+  (a link to one is fine) owned by you or root. The child gets only PATH, the home folder, the tool's own home-folder variable and (Windows)
   SystemRoot/TEMP/TMP, and runs in its own process group (killed whole on exit or timeout; on Windows with `taskkill /T /F`).
   On Windows a `.cmd` shim is started as `cmd.exe /d /c <validated path> app-server` with fixed arguments; a path containing
   `% ^ & | < > " ( ) !` is refused. The Windows part is untested.
@@ -121,8 +122,8 @@ A plain `cargo build` produces a binary that loads the dev server address (`devU
 never starts. Use `npm run tauri build` (or `cargo build --features tauri/custom-protocol` after `npm run build`). CI builds
 with `--locked`.
 
-Test-only environment: `USAGEBAR_TEST=1`, `USAGEBAR_DATA_DIR`, `USAGEBAR_CLAUDE_DIR`, `USAGEBAR_CODEX_DIR`,
-`USAGEBAR_API_BASE_CLAUDE`, `USAGEBAR_API_BASE_CODEX`, `USAGEBAR_CODEX_BIN`.
+Test-only environment: `USAGEBAR_TEST=1`, `USAGEBAR_DATA_DIR`, plus per-tool folder, API base and program-path overrides (all
+`USAGEBAR_*`; the full list is in `src-tauri/src/usage.rs` and `creds.rs`).
 
 ## What was verified, and what was not
 
@@ -138,8 +139,8 @@ automated smoke test on all three systems (Linux on x86_64 only). That test does
 
 - Windows and Linux by hand: tray behaviour, autostart, notifications, credential locations, window placement, the Linux
   AppIndicator tray, the Windows `taskkill` tree kill, the `.cmd` shim path, Windows credential and home-folder precedence and
-  Windows `codex.exe` lookup.
-- The real Claude and Codex endpoints (never called by the author).
+  the Windows program lookup.
+- The real usage endpoints of either tool (never called by the author).
 - The macOS Keychain (not supported).
 
 ## Differences from the Mac bar
@@ -148,7 +149,7 @@ automated smoke test on all three systems (Linux on x86_64 only). That test does
   tray shows text only on macOS (Windows and Linux show the icon and a tooltip).
 - Glass and blur only soften what is inside the popup (a webview cannot blur your desktop). The settings are still stored.
 - Numbers come from the response directly instead of parsing text rows; labels are the same (`5h limit`, `Weekly limit`,
-  `Weekly Opus`, `Spark 5h`). A limit that is nearly used up (99.6% used) reads `0% left` because "left" is rounded down on
+  and the model-specific weekly and 5-hour rows). A limit that is nearly used up (99.6% used) reads `0% left` because "left" is rounded down on
   purpose (conservative): 0.5% used reads 99% left, and 100% left is shown only when nothing is used.
 - Reset texts (only used when a provider sends text instead of a time) are computed with the platform time-zone database; for a
   few instants around daylight-saving changes (checked for America/Vancouver) the result can differ by an hour from the Mac bar's
@@ -157,7 +158,7 @@ automated smoke test on all three systems (Linux on x86_64 only). That test does
 - Mac-model quirks kept: a numeric string or boolean passed to the state / delay functions is read like Python's `float()` /
   `int()`. Arabic-Indic digits in reset text ("resets ١٧:١٩") are not read (Python's `\d` accepts them).
 - No "Open terminal" button; "Use a usage reset" opens the usage page in the browser (you press the button there).
-- Gemini is not covered (it has no limits on the Mac either).
+- Only the two supported tools are covered, as on the Mac.
 
 ## Known gaps
 
